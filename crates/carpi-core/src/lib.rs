@@ -91,6 +91,8 @@ pub struct Car {
     /// Diag subscriptions for the DIS readings page on screen: its keys, the
     /// ids, and when the lease was last renewed.
     dis_subs: (Vec<String>, Vec<DiagSubId>, Option<Instant>),
+    /// The ICAN gate's top-line counters when update progress text started.
+    update_text_from: Option<carpi_gate::ClassStats>,
 }
 
 impl Car {
@@ -122,6 +124,7 @@ impl Car {
             display: display::Display::new(DisSetup::default()),
             diag,
             dis_subs: (Vec::new(), Vec::new(), None),
+            update_text_from: None,
         }
     }
 
@@ -202,11 +205,46 @@ impl Car {
     /// update ends. Beats every other top-line source, and the ICAN gate lets
     /// it past the update's lease and the RNS-E's reboot.
     pub fn set_update_text(&mut self, text: Option<String>, now: Instant) {
-        if let Some(i) = self.ican_idx() {
-            self.controls.gates[i].set_update_text(text.is_some());
-        }
+        let on = text.is_some();
         self.display.set_update_text(text);
+        let Some(i) = self.ican_idx() else {
+            tracing::warn!("update progress text: no ICAN interface");
+            return;
+        };
+        self.controls.gates[i].set_update_text(on);
         self.service(now);
+        // One line per job: how many progress frames went out, and why the rest didn't.
+        let st = self.controls.gates[i].stats(carpi_gate::TxClass::DisplayTop);
+        match (on, self.update_text_from) {
+            (true, None) => {
+                self.update_text_from = Some(st);
+                if !self.display.top_enabled() {
+                    tracing::warn!(
+                        "update progress text: the DIS is disabled in config, nothing shows"
+                    );
+                }
+            }
+            (false, Some(from)) => {
+                self.update_text_from = None;
+                let refused: Vec<String> = carpi_gate::Refused::ALL
+                    .iter()
+                    .filter_map(|&w| {
+                        let n = st.refused(w) - from.refused(w);
+                        (n > 0).then(|| format!("{w} {n}"))
+                    })
+                    .collect();
+                tracing::info!(
+                    "update progress text done: {} top-line frames sent, refused: {}",
+                    st.passed - from.passed,
+                    if refused.is_empty() {
+                        "none".into()
+                    } else {
+                        refused.join(", ")
+                    }
+                );
+            }
+            _ => {}
+        }
     }
 
     pub fn rnse_release(&mut self) {

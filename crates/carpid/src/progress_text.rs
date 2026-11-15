@@ -38,6 +38,29 @@ pub fn line(phase: &str, pct: u32, tick: usize) -> String {
     format!("{phase:<2.2}{pct:>3}% {}", SPIN[tick % SPIN.len()])
 }
 
+/// Sets the phase from another thread (a blocking flash loop).
+#[derive(Clone)]
+pub struct Handle(Arc<Mutex<State>>);
+
+impl Handle {
+    pub fn set(&self, phase: &'static str, pct: u32) {
+        *self.0.lock().unwrap() = State {
+            phase,
+            pct,
+            ramp: None,
+        };
+    }
+
+    /// `from` -> `to` percent over `over`, for a step that reports nothing.
+    pub fn ramp(&self, phase: &'static str, from: u32, to: u32, over: Duration) {
+        *self.0.lock().unwrap() = State {
+            phase,
+            pct: from,
+            ramp: Some((Instant::now(), to.max(from), over)),
+        };
+    }
+}
+
 pub struct Progress {
     state: Arc<Mutex<State>>,
     tx: mpsc::Sender<Msg>,
@@ -72,21 +95,17 @@ impl Progress {
         }
     }
 
+    pub fn handle(&self) -> Handle {
+        Handle(self.state.clone())
+    }
+
     pub fn set(&self, phase: &'static str, pct: u32) {
-        *self.state.lock().unwrap() = State {
-            phase,
-            pct,
-            ramp: None,
-        };
+        self.handle().set(phase, pct);
     }
 
     /// `from` -> `to` percent over `over`, for a step that reports nothing.
     pub fn ramp(&self, phase: &'static str, from: u32, to: u32, over: Duration) {
-        *self.state.lock().unwrap() = State {
-            phase,
-            pct: from,
-            ramp: Some((Instant::now(), to.max(from), over)),
-        };
+        self.handle().ramp(phase, from, to, over);
     }
 
     /// Shows the result for a few seconds, then gives the line back.

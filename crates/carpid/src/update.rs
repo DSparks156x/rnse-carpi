@@ -361,7 +361,7 @@ impl Jobs {
             match action {
                 A::Probe => fw.probe(tx, &events).await,
                 A::InstallRnse { .. } => fw.install_rnse(tx, &events).await,
-                A::InstallTeensy { .. } => fw.install_teensy(&events).await,
+                A::InstallTeensy { .. } => fw.install_teensy(tx, &events).await,
                 A::FlashSector { name, .. } => fw.flash_sector(&name, tx, &events).await,
                 A::Status => {}
             }

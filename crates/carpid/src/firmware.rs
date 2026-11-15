@@ -1236,10 +1236,19 @@ impl Firmware {
     }
 
     // ------------------------------------------------------------ Teensy install
-    pub async fn install_teensy(self: &std::sync::Arc<Self>, ev: &Events) {
-        let r = tokio::time::timeout(Duration::from_secs(10 * 60), self.install_teensy_inner(ev))
-            .await
-            .unwrap_or_else(|_| Err("stopped after 10 minutes".into()));
+    pub async fn install_teensy(
+        self: &std::sync::Arc<Self>,
+        tx: mpsc::Sender<crate::Msg>,
+        ev: &Events,
+    ) {
+        let p = Progress::start(tx);
+        let r = tokio::time::timeout(
+            Duration::from_secs(10 * 60),
+            self.install_teensy_inner(ev, &p),
+        )
+        .await
+        .unwrap_or_else(|_| Err("stopped after 10 minutes".into()));
+        p.end(r.is_ok());
         self.emit_status(ev).await;
         let (ok, message) = match r {
             Ok(m) => (true, m),
@@ -1248,7 +1257,7 @@ impl Firmware {
         finish(ev, ok, message);
     }
 
-    async fn install_teensy_inner(&self, ev: &Events) -> Result<String, String> {
+    async fn install_teensy_inner(&self, ev: &Events, p: &Progress) -> Result<String, String> {
         let root = self.root.clone();
         let bundle = tokio::task::spawn_blocking(move || load_bundle(&root))
             .await
@@ -1264,13 +1273,25 @@ impl Firmware {
         if port.is_none() {
             return Err("the Teensy isn't on USB".into());
         }
+        p.set("PR", 1);
         let restart = self.stop_chain(ev).await?;
         stage(ev, "flash", "Flashing the Teensy");
+        // Bootloader 1-5 %, the first block waits for the erase (5-20 %), blocks 20-90 %.
+        p.ramp("BL", 1, 5, Duration::from_secs(5));
         let (say_tx, mut say_rx) = mpsc::unbounded_channel::<String>();
+        let h = p.handle();
         let job = tokio::task::spawn_blocking(move || {
-            crate::teensy::flash(&mem, port.as_deref(), &mut |m| {
-                let _ = say_tx.send(m);
-            })
+            crate::teensy::flash(
+                &mem,
+                port.as_deref(),
+                &mut |m| {
+                    let _ = say_tx.send(m);
+                },
+                &mut |k, n| match k {
+                    0 => h.ramp("ER", 5, 20, Duration::from_secs(15)),
+                    _ => h.set("TX", 20 + (70 * k / n.max(1)) as u32),
+                },
+            )
         });
         let fwd = {
             let ev = ev.clone();
@@ -1286,6 +1307,7 @@ impl Firmware {
             Err(e) => Err(e),
             Ok(()) => {
                 stage(ev, "verify", "Waiting for the Teensy to come back");
+                p.ramp("BT", 90, 98, Duration::from_secs(10));
                 let end = Instant::now() + Duration::from_secs(20);
                 let mut v = Err("the Teensy didn't come back on USB".to_string());
                 while Instant::now() < end {

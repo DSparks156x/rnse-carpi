@@ -201,6 +201,7 @@ pub fn flash(
     mem: &BTreeMap<u32, u8>,
     port: Option<&Path>,
     say: &mut dyn FnMut(String),
+    done: &mut dyn FnMut(usize, usize),
 ) -> Result<(), String> {
     use std::io::Write;
     let blocks = blocks(mem);
@@ -242,6 +243,7 @@ pub fn flash(
         .write(true)
         .open(&dev)
         .map_err(|e| format!("{}: {e} (is the udev rule installed?)", dev.display()))?;
+    done(0, blocks.len());
     for (k, pkt) in blocks.iter().enumerate() {
         // The first block erases the flash and is refused until that's done.
         let limit = Instant::now() + Duration::from_secs(if k == 0 { 180 } else { 10 });
@@ -256,6 +258,7 @@ pub fn flash(
                 Err(_) => std::thread::sleep(Duration::from_millis(20)),
             }
         }
+        done(k + 1, blocks.len());
         if (k + 1) % 64 == 0 {
             say(format!("{} of {} blocks", k + 1, blocks.len()));
         }
@@ -279,6 +282,7 @@ pub fn flash(
     _: &BTreeMap<u32, u8>,
     _: Option<&Path>,
     _: &mut dyn FnMut(String),
+    _: &mut dyn FnMut(usize, usize),
 ) -> Result<(), String> {
     Err("not supported on this OS".into())
 }

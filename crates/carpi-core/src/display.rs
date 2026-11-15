@@ -580,6 +580,11 @@ fn window_name(w: Window) -> &'static str {
 }
 
 impl Display {
+    /// The DIS driver is on in config (top lines included).
+    pub fn top_enabled(&self) -> bool {
+        self.setup.enabled
+    }
+
     /// RNS-E update progress (8 cells, line 1 only), `None` when the update ends.
     pub fn set_update_text(&mut self, text: Option<String>) {
         self.update_text = text;
