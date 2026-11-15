@@ -682,6 +682,10 @@ impl Firmware {
 
     /// Status now. Blocking (systemctl, files): call it off the loop.
     pub fn status(&self) -> FirmwareStatus {
+        self.status_as(self.busy())
+    }
+
+    fn status_as(&self, busy: bool) -> FirmwareStatus {
         let bundle = load_bundle(&self.root);
         let chain = chain_now(&self.unit);
         let seen = self.seen.lock().unwrap();
@@ -689,7 +693,7 @@ impl Firmware {
             seen: &seen,
             bundle: &bundle,
             chain: &chain,
-            busy: self.busy(),
+            busy,
             can: self.interface.is_some(),
         });
         st.uploads = self
@@ -700,15 +704,13 @@ impl Firmware {
         st
     }
 
-    async fn status_async(self: &std::sync::Arc<Self>) -> FirmwareStatus {
-        let me = self.clone();
-        tokio::task::spawn_blocking(move || me.status())
-            .await
-            .unwrap_or_default()
-    }
-
+    /// The job's closing status. The slot is freed only after the job returns, so
+    /// `busy` now is this ending job: report it free, or the page stays busy until it re-asks.
     async fn emit_status(self: &std::sync::Arc<Self>, ev: &Events) {
-        let s = self.status_async().await;
+        let me = self.clone();
+        let s = tokio::task::spawn_blocking(move || me.status_as(false))
+            .await
+            .unwrap_or_default();
         let _ = ev.send(JobEvent::Firmware(Box::new(s)));
     }
 

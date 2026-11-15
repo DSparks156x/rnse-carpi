@@ -83,7 +83,8 @@ pub async fn run_job(
         UpdateAction::Apply => updater.run(&["apply"], true, events).await,
         UpdateAction::Check => online(bridge, net, updater, t, "check", events).await,
         UpdateAction::Fetch => match online(bridge, net, updater, t, "fetch", events).await {
-            Ok(msg) if and_apply => {
+            // Up to date: fetch is fine but nothing waits to be applied.
+            Ok(msg) if and_apply && downloaded(updater).await => {
                 stage(events, "fetch", msg);
                 updater.run(&["apply"], true, events).await
             }
@@ -95,6 +96,23 @@ pub async fn run_job(
         Err(m) => (false, m),
     };
     let _ = events.send(JobEvent::Finished { ok, message });
+}
+
+/// A downloaded bundle waits for `apply` (`carpi-update status`, offline).
+async fn downloaded(updater: &impl Updater) -> bool {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    if updater.run(&["status"], false, &tx).await.is_err() {
+        // Unknown: let apply say what's wrong.
+        return true;
+    }
+    drop(tx);
+    let mut found = false;
+    while let Some(e) = rx.recv().await {
+        if let JobEvent::Installed(i) = e {
+            found = i.downloaded.is_some();
+        }
+    }
+    found
 }
 
 /// Steps 1-4: `carpi-update <sub>` with the internet, AP back afterwards.
@@ -505,6 +523,8 @@ mod tests {
     struct FakeUpdater {
         log: Log,
         fetch: Behave,
+        /// What `status` reports as downloaded after the fetch.
+        downloaded: bool,
     }
 
     impl Updater for FakeUpdater {
@@ -523,6 +543,16 @@ mod tests {
                 stage: what.clone(),
                 message: String::new(),
             });
+            if what == "status" {
+                let _ = events.send(JobEvent::Installed(carpi_proto::Installed {
+                    current: Some("v1".into()),
+                    previous: None,
+                    downloaded: self.downloaded.then(|| "v2".into()),
+                    last_apply: None,
+                    os_profile: None,
+                    update_running: None,
+                }));
+            }
             match (what.as_str(), self.fetch) {
                 ("fetch" | "check", Behave::Fail) => Err("404".into()),
                 ("fetch" | "check", Behave::Hang) => {
@@ -540,6 +570,16 @@ mod tests {
         net_after: Option<u32>,
         fetch: Behave,
     ) -> (Vec<String>, Vec<JobEvent>) {
+        job_with(action, and_apply, net_after, fetch, true).await
+    }
+
+    async fn job_with(
+        action: UpdateAction,
+        and_apply: bool,
+        net_after: Option<u32>,
+        fetch: Behave,
+        downloaded: bool,
+    ) -> (Vec<String>, Vec<JobEvent>) {
         let log = Log::default();
         let (tx, mut rx) = mpsc::unbounded_channel();
         run_job(
@@ -554,6 +594,7 @@ mod tests {
             &FakeUpdater {
                 log: log.clone(),
                 fetch,
+                downloaded,
             },
             TIMING,
             &tx,
@@ -584,6 +625,7 @@ mod tests {
                 "online",
                 "run fetch",
                 "ap Resume",
+                "run status",
                 "run apply detached"
             ]
         );
@@ -596,6 +638,22 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn up_to_date_fetch_skips_apply() {
+        let (log, events) = job_with(UpdateAction::Fetch, true, Some(1), Behave::Ok, false).await;
+        assert_eq!(
+            log,
+            [
+                "ap Suspend",
+                "online",
+                "run fetch",
+                "ap Resume",
+                "run status"
+            ]
+        );
+        assert_eq!(finished(&events), (true, "fetch done".into()));
     }
 
     #[tokio::test(start_paused = true)]
@@ -634,7 +692,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn online_already_keeps_the_ap_up() {
         let (log, _) = job(UpdateAction::Fetch, true, Some(0), Behave::Ok).await;
-        assert_eq!(log, ["online", "run fetch", "run apply detached"]);
+        assert_eq!(
+            log,
+            ["online", "run fetch", "run status", "run apply detached"]
+        );
     }
 
     #[tokio::test(start_paused = true)]

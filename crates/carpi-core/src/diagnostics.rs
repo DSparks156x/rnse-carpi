@@ -306,11 +306,11 @@ impl Diagnostics {
             self.haldex_next = Some(now + Duration::from_secs(2));
             return;
         }
-        if let Some(mode) = self.haldex.last_mode {
-            if let Err(e) = self.haldex_start(now, mode) {
-                self.haldex_status = e;
-                self.haldex_next = Some(now + Duration::from_secs(10));
-            }
+        if let Some(mode) = self.haldex.last_mode
+            && let Err(e) = self.haldex_start(now, mode)
+        {
+            self.haldex_status = e;
+            self.haldex_next = Some(now + Duration::from_secs(10));
         }
     }
 
