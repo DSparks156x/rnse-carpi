@@ -475,6 +475,7 @@ impl Daemon {
                     return;
                 }
                 let is_scan = action == DiagAction::Scan;
+                let is_haldex = matches!(action, DiagAction::SetHaldexMode { .. });
                 match car.diag_start(action, now) {
                     Ok(id) => {
                         self.diag_jobs.insert(id, events);
@@ -484,6 +485,9 @@ impl Daemon {
                         let _ = reply.send(Ok(()));
                     }
                     Err(e) => {
+                        if is_haldex {
+                            warn!("haldex: refused: {e}");
+                        }
                         let _ = reply.send(Err(e));
                     }
                 }

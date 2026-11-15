@@ -290,7 +290,7 @@ fn engine_values_reach_the_store_at_the_asked_rate() {
     assert_eq!(w.num("engine.atmospheric_mbar"), Some(795.0));
     // One channel, our tester ID, never 0x300.
     assert_eq!(w.setups(0x01), 1);
-    assert!(w.gw.setups.iter().all(|(_, t)| (0x308..=0x30F).contains(t)));
+    assert!(w.gw.setups.iter().all(|(_, t)| (0x301..=0x307).contains(t)));
     assert!(w.dm.store.age("engine.maf_gs", w.now()).unwrap() < ms(300));
     // Store timeout is 3 x 200 ms, floored at 1 s: once reads stop, the value
     // reads as nothing after a second.

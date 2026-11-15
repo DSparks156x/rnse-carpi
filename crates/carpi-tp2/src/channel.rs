@@ -851,9 +851,9 @@ fn frame_seq(f: &[u8]) -> u8 {
 
 /// Tester RX IDs for dynamic channels. One per open channel.
 ///
-/// Default 0x308..=0x30F. 0x300 is VCDS's and is never handed out (PLAN 6).
-/// `[jazdw]` suggests 0x300..0x310. The old worker used 0x300-0x306 but the only
-/// trace shows 0x300; whether modules take other IDs is unproven on the car.
+/// Default 0x301..=0x307. 0x300 is VCDS's and is never handed out (PLAN 6).
+/// The old worker's pool (0x300-0x306) reached every module, the Haldex included.
+/// With 0x308+ the Haldex stopped answering setup on the car.
 #[derive(Clone, Debug)]
 pub struct TesterIds {
     free: Vec<u16>,
@@ -890,6 +890,6 @@ impl TesterIds {
 
 impl Default for TesterIds {
     fn default() -> Self {
-        TesterIds::new(0x308..=0x30F)
+        TesterIds::new(0x301..=0x307)
     }
 }

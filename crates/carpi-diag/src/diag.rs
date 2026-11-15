@@ -61,7 +61,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             max_channels: 4,
-            tester_ids: (0x308..=0x30F).collect(),
+            tester_ids: (0x301..=0x307).collect(),
             grace: Duration::from_secs(5),
             backoff_min: Duration::from_secs(1),
             backoff_max: Duration::from_secs(30),

@@ -416,5 +416,6 @@ fn tester_ids_never_0x300() {
     ids.release(0x300);
     assert_eq!(ids.alloc(), Some(0x301));
     let d = TesterIds::default();
-    assert_eq!(d.available(), 8);
+    assert_eq!(d.available(), 7);
+    assert_eq!(TesterIds::default().alloc(), Some(0x301));
 }

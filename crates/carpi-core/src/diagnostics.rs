@@ -290,6 +290,7 @@ impl Diagnostics {
         self.haldex_job = Some((id, mode));
         self.haldex_next = None;
         self.haldex_status = format!("Switching to {}", mode.name());
+        tracing::info!("haldex: switching to {}", mode.name());
         Ok(id)
     }
 
@@ -309,6 +310,7 @@ impl Diagnostics {
         if let Some(mode) = self.haldex.last_mode
             && let Err(e) = self.haldex_start(now, mode)
         {
+            tracing::warn!("haldex: restore {}: {e}", mode.name());
             self.haldex_status = e;
             self.haldex_next = Some(now + Duration::from_secs(10));
         }
@@ -542,11 +544,13 @@ impl Diagnostics {
                             self.haldex.last_mode = Some(mode);
                             self.haldex_applied = Some(mode);
                             self.haldex_status = "Confirmed".into();
+                            tracing::info!("haldex: {} confirmed", mode.name());
                             self.haldex_confirmed.push((id, mode));
                         }
                         Err(e) => {
                             self.haldex_applied = None;
                             self.haldex_status = job_error(e);
+                            tracing::warn!("haldex: {} failed: {e:?}", mode.name());
                             // An unsupported handler never receives repeated probes or writes.
                             if matches!(e, JobError::HaldexUnsupported) {
                                 self.haldex_next = None;

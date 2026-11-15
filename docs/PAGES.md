@@ -263,7 +263,7 @@ Mockup: claude.ai/artifact/MuNUKGJRVd6pYSFr2JYzW7. Replaces the Data and Diagnos
 Data                        top level, tabs: Panels · Logs · Faults
 ├─ Panels                   panel pages + page dots; Scratch last
 ├─ Logs                     Start/Stop, Mark, Profile, Profiles ›, Runs ›
-└─ Faults                   scan on open; module ›: faults, Clear faults, Identity ›, Coding ›, Adaptation ›
+└─ Faults                   Scan button; module ›: faults, Clear faults, Identity ›, Coding ›, Adaptation ›
 ```
 
 ### Controls
@@ -315,7 +315,7 @@ A viewing panel takes no focus.
 
 ### Faults
 
-- Scan when the tab opens: install list, then faults per module as they answer. Faults first. TP2 modules only.
+- Scan with the Scan button (no scan on open): install list, then faults per module as they answer. Faults first. TP2 modules only.
 - Each scan writes a text report into the day folder.
 - Module: faults (code, text, status, count, freeze frame), Clear faults (Confirm clear), Identity › (part no., component, SW, workshop), Coding ›, Adaptation ›.
 - Clear all: no gating.

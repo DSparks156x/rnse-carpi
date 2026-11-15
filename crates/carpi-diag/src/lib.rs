@@ -10,7 +10,7 @@
 //!   measuring-block field).
 //! - Channel manager: one state machine per module, Closed → Opening → Open →
 //!   Grace → Closed, plus Failed with backoff. Tester RX IDs from
-//!   [`carpi_tp2::TesterIds`] (0x308..=0x30F, never VCDS's 0x300). A cap on
+//!   [`carpi_tp2::TesterIds`] (0x301..=0x307, never VCDS's 0x300). A cap on
 //!   concurrent channels (default 4) for safety. Each module has its own KWP
 //!   client with one request outstanding, so a slow module never stalls the rest.
 //! - Scheduler: subscriptions `{value, period, priority, lease_expires}`. ICAN
