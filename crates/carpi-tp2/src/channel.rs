@@ -134,6 +134,9 @@ pub enum CloseReason {
     Sequence {
         expected: u8,
         got: u8,
+        /// The out-of-sequence frame, and the last frame we ACKed (for the log).
+        frame: Vec<u8>,
+        last_acked: Option<Vec<u8>>,
     },
     Length {
         declared: usize,
@@ -639,6 +642,8 @@ impl Channel {
             self.fail(CloseReason::Sequence {
                 expected: self.rx_seq,
                 got: seq,
+                frame: raw.to_vec(),
+                last_acked: self.last_acked_rx.clone(),
             });
             return;
         }

@@ -1389,7 +1389,9 @@ impl Diag {
                 }
                 // Each Haldex mode request goes on a fresh channel (see Opened).
                 if matches!(self.jobs[i].job, Job::HaldexMode { .. }) && self.modules[&m].used {
-                    let Diag { modules, ids, out, .. } = self;
+                    let Diag {
+                        modules, ids, out, ..
+                    } = self;
                     shut(modules.get_mut(&m).expect("exists"), now, true, ids, out);
                     continue;
                 }

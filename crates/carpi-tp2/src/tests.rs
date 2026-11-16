@@ -333,7 +333,9 @@ fn duplicate_frame_reacked_and_sequence_error() {
             generation: 1,
             reason: CloseReason::Sequence {
                 expected: 1,
-                got: 3
+                got: 3,
+                frame: vec![0x13, 0xBB],
+                last_acked: Some(vec![0x10, 0xAA]),
             }
         }]
     );
