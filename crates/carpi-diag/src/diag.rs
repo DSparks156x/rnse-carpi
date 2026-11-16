@@ -249,6 +249,8 @@ struct ModuleCh {
     failures: u32,
     timeouts: u32,
     last_error: Option<ChannelError>,
+    /// A request has gone out on this channel since it opened.
+    used: bool,
 }
 
 impl ModuleCh {
@@ -261,6 +263,7 @@ impl ModuleCh {
             failures: 0,
             timeouts: 0,
             last_error: None,
+            used: false,
         }
     }
     fn holds_slot(&self) -> bool {
@@ -377,6 +380,7 @@ fn shut(
         ids.release(id);
     }
     ch.inflight = None;
+    ch.used = false;
     ch.state = ChannelState::Closed;
 }
 
@@ -1067,6 +1071,16 @@ impl Diag {
 
     fn on_kwp(&mut self, now: Instant, m: u8, ev: KwpEvent) {
         match ev {
+            // The 7716 Haldex answers the 3B F0 extension with sequence 0, so a 10 89
+            // reply before it reads as a sequence error. The old worker never sent
+            // 10 89 and reached it every time.
+            KwpEvent::Opened { .. } if m == carpi_kwp::haldex::MODULE => {
+                let ch = self.modules.get_mut(&m).expect("exists");
+                ch.state = ChannelState::Open;
+                ch.failures = 0;
+                ch.timeouts = 0;
+                ch.last_error = None;
+            }
             KwpEvent::Opened { .. } => {
                 let req = self.wrap(m, services::start_session());
                 let ch = self.modules.get_mut(&m).expect("exists");
@@ -1356,6 +1370,7 @@ impl Diag {
             let ch = self.modules.get_mut(&m).expect("exists");
             ch.kwp = Some(k);
             ch.tester_rx = Some(rx);
+            ch.used = false;
             ch.state = ChannelState::Opening;
             active += 1;
         }
@@ -1372,6 +1387,12 @@ impl Diag {
                 if self.jobs[i].not_before.is_some_and(|t| now < t) {
                     continue;
                 }
+                // Each Haldex mode request goes on a fresh channel (see Opened).
+                if matches!(self.jobs[i].job, Job::HaldexMode { .. }) && self.modules[&m].used {
+                    let Diag { modules, ids, out, .. } = self;
+                    shut(modules.get_mut(&m).expect("exists"), now, true, ids, out);
+                    continue;
+                }
                 self.jobs[i].not_before = None;
                 let req = self.wrap(m, self.jobs[i].request());
                 let mut bytes = [0u8; 2];
@@ -1381,6 +1402,7 @@ impl Diag {
                 let ch = self.modules.get_mut(&m).expect("exists");
                 match ch.kwp.as_mut().expect("open").request(now, req) {
                     Ok(_) => {
+                        ch.used = true;
                         let j = &mut self.jobs[i];
                         j.active = true;
                         ch.inflight = Some(Inflight::Job(j.id));
@@ -1419,6 +1441,7 @@ impl Diag {
                 .request(now, group::read_group(key.1))
             {
                 Ok(_) => {
+                    ch.used = true;
                     ch.inflight = Some(Inflight::Group {
                         group: key.1,
                         started: now,

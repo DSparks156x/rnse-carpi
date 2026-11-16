@@ -903,6 +903,10 @@ mod tests {
         bus.run_for(&mut [&mut n, &mut gw], Duration::from_secs(2));
         assert_eq!(n.d.haldex_applied, Some(M::Performance));
         assert_eq!(n.d.haldex_confirmed.len(), 1);
+        // Like the old worker: no 10 89, only the three 3B F0 requests.
+        let reqs = &gw.module(0x0A).requests;
+        assert_eq!(reqs.len(), 3, "{reqs:02X?}");
+        assert!(reqs.iter().all(|r| r[..2] == [0x3B, 0xF0]), "{reqs:02X?}");
         n.d.configure_haldex(saved, true, bus.now);
         let count = gw.module(0x0A).requests.len();
         bus.run_for(&mut [&mut n, &mut gw], Duration::from_secs(20));
