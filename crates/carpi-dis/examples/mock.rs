@@ -546,6 +546,200 @@ fn readings(out: &Path) {
     sheet(&tiles, 2, &out.join("readings.png"));
 }
 
+/// Pitched default pages: (name, [(key, decimals, unit, icon, value)]).
+fn readings_pitch(out: &Path) {
+    use carpi_dis::screens::readings::{ReadingCell, ReadingsInput, ReadingsPage, ReadingsScreen};
+    type C = (
+        &'static str,
+        u8,
+        &'static str,
+        Option<&'static str>,
+        Option<f64>,
+    );
+    let pages: Vec<(&str, Vec<C>)> = vec![
+        (
+            "Readings",
+            vec![
+                ("engine.coolant_c", 0, "\u{B0}C", None, Some(91.0)),
+                ("engine.boost.cluster_mbar", 0, "mbar", None, Some(1980.0)),
+                ("engine.intake_temp_c", 0, "\u{B0}C", None, Some(31.0)),
+                ("engine.injection_ms", 2, "ms", None, Some(3.42)),
+                ("engine.oil_temp_c", 0, "\u{B0}C", None, Some(104.0)),
+                ("engine.maf_gs", 1, "g/s", None, Some(142.5)),
+                ("engine.ignition_timing_deg", 1, "\u{B0}", None, Some(8.5)),
+                ("engine.fuel_rail.actual_bar", 0, "bar", None, Some(108.0)),
+            ],
+        ),
+        (
+            "Cruise",
+            vec![
+                ("engine.coolant_c", 0, "\u{B0}C", None, Some(90.0)),
+                ("engine.oil_temp_c", 0, "\u{B0}C", None, Some(98.0)),
+                ("ambient.outside_temp_c", 1, "\u{B0}C", None, Some(7.5)),
+                ("power.battery_v", 1, "V", None, Some(14.2)),
+                ("fuel.range_km", 0, "km", None, Some(412.0)),
+                ("fuel.consumption_l100km", 1, "L/100km", None, Some(8.4)),
+                ("fuel.level_l", 0, "L", None, Some(38.0)),
+                ("engine.boost.cluster_mbar", 0, "mbar", None, Some(1010.0)),
+            ],
+        ),
+        (
+            "Temps",
+            vec![
+                ("engine.coolant_c", 0, "\u{B0}C", None, Some(92.0)),
+                ("engine.oil_temp_c", 0, "\u{B0}C", None, Some(109.0)),
+                ("engine.intake_temp_c", 0, "\u{B0}C", None, Some(38.0)),
+                (
+                    "engine.exhaust_temp.projected_c",
+                    0,
+                    "\u{B0}C",
+                    None,
+                    Some(842.0),
+                ),
+                (
+                    "trans.clutch_oil_temp_c",
+                    0,
+                    "\u{B0}C",
+                    Some("clutch"),
+                    Some(96.0),
+                ),
+                ("trans.fluid_temp_c", 0, "\u{B0}C", Some("gear"), Some(88.0)),
+                ("awd.oil_temp_c", 0, "\u{B0}C", Some("awd"), Some(54.0)),
+                ("awd.plate_temp_c", 0, "\u{B0}C", Some("awd"), Some(61.0)),
+            ],
+        ),
+        (
+            "Boost",
+            vec![
+                ("engine.boost.actual", 0, "mbar", None, Some(2210.0)),
+                (
+                    "engine.boost.specified",
+                    0,
+                    "mbar",
+                    Some("target"),
+                    Some(2240.0),
+                ),
+                ("engine.n75_duty_pct", 0, "%", Some("valve"), Some(71.0)),
+                ("engine.intake_temp_c", 0, "\u{B0}C", None, Some(36.0)),
+                (
+                    "engine.timing_retard.cyl1_deg",
+                    1,
+                    "\u{B0}",
+                    None,
+                    Some(-1.5),
+                ),
+                (
+                    "engine.timing_retard.cyl2_deg",
+                    1,
+                    "\u{B0}",
+                    None,
+                    Some(-4.5),
+                ),
+                (
+                    "engine.timing_retard.cyl3_deg",
+                    1,
+                    "\u{B0}",
+                    None,
+                    Some(0.0),
+                ),
+                (
+                    "engine.timing_retard.cyl4_deg",
+                    1,
+                    "\u{B0}",
+                    None,
+                    Some(-0.8),
+                ),
+            ],
+        ),
+        (
+            "Fuel",
+            vec![
+                ("engine.fuel_rail.actual_bar", 0, "bar", None, Some(108.0)),
+                (
+                    "engine.fuel_rail.specified_bar",
+                    0,
+                    "bar",
+                    Some("target"),
+                    Some(110.0),
+                ),
+                ("engine.fuel_pump_pct", 0, "%", None, Some(64.0)),
+                ("engine.injection_ms", 2, "ms", None, Some(4.12)),
+                ("engine.lambda.actual", 3, "", None, Some(0.812)),
+                (
+                    "engine.lambda.specified",
+                    3,
+                    "",
+                    Some("target"),
+                    Some(0.800),
+                ),
+                ("engine.maf_gs", 1, "g/s", None, Some(171.3)),
+                (
+                    "engine.exhaust_temp.projected_c",
+                    0,
+                    "\u{B0}C",
+                    None,
+                    Some(868.0),
+                ),
+            ],
+        ),
+        (
+            "Driveline",
+            vec![
+                ("trans.k1.pressure_bar", 1, "bar", Some("clutch"), Some(9.8)),
+                ("trans.k2.pressure_bar", 1, "bar", Some("clutch"), Some(0.4)),
+                (
+                    "trans.clutch_oil_temp_c",
+                    0,
+                    "\u{B0}C",
+                    Some("clutch"),
+                    Some(96.0),
+                ),
+                ("trans.input_rpm", 0, "rpm", Some("gear"), Some(3120.0)),
+                ("awd.estimated_torque_nm", 0, "Nm", Some("awd"), Some(840.0)),
+                ("awd.oil_pressure_bar", 1, "bar", Some("awd"), Some(22.5)),
+                ("awd.valve_opening_pct", 0, "%", Some("valve"), Some(18.0)),
+                ("awd.plate_temp_c", 0, "\u{B0}C", Some("awd"), Some(61.0)),
+            ],
+        ),
+    ];
+    let rp: Vec<ReadingsPage> = pages
+        .iter()
+        .map(|(n, cells)| ReadingsPage {
+            name: (*n).into(),
+            cells: cells
+                .iter()
+                .map(|(k, d, u, i, _)| ReadingCell {
+                    key: (*k).into(),
+                    decimals: *d,
+                    icon: i.map(String::from),
+                    unit: Some((*u).into()),
+                })
+                .collect(),
+        })
+        .collect();
+    let mut tiles = Vec::new();
+    for (page, (name, cells)) in pages.iter().enumerate() {
+        let mut s = ReadingsScreen::with_pages(rp.clone());
+        for _ in 0..page {
+            s.step(1);
+        }
+        let mut values = [None; 8];
+        for (i, c) in cells.iter().enumerate() {
+            values[i] = c.4;
+        }
+        s.set(ReadingsInput {
+            title: String::new(),
+            values,
+        });
+        tiles.push(Tile {
+            label: (*name).into(),
+            fb: render_at(&mut s, Instant::now(), &[]),
+            top: None,
+        });
+    }
+    sheet(&tiles, 3, &out.join("readings-pitch.png"));
+}
+
 /// Accel test through a run, imperial legs: ready, timing, a leg just done
 /// (1 s inverted flash), results, then rolling after a lift.
 fn accel(out: &Path) {
@@ -609,6 +803,7 @@ fn main() {
         "nav-stock" => nav_stock(&out),
         "media" => media(&out),
         "readings" => readings(&out),
+        "readings-pitch" => readings_pitch(&out),
         "accel" => accel(&out),
         other => panic!("unknown sheet {other}"),
     }

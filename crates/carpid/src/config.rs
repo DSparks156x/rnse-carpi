@@ -365,6 +365,106 @@ pub struct CellCfg {
     pub icon: Option<String>,
 }
 
+/// The readings pages before any are set: Drew's page, then one cruise page
+/// of ICAN values only, then pages that each read few diag groups (Temps:
+/// engine 134/112, DSG 19, Haldex 1; Boost: engine 115/118/20; Fuel: engine
+/// 106/31/2/112; Driveline: DSG 11/12/19, Haldex 3/1).
+pub fn default_pages() -> Vec<PageCfg> {
+    let page = |name: &str, cells: &[(&str, u8, Option<&str>)]| PageCfg {
+        name: name.into(),
+        cells: cells
+            .iter()
+            .map(|&(key, decimals, icon)| CellCfg {
+                key: key.into(),
+                decimals,
+                scale: 1.0,
+                unit: None,
+                icon: icon.map(String::from),
+            })
+            .collect(),
+    };
+    vec![
+        page(
+            "Readings",
+            &[
+                ("engine.coolant_c", 0, None),
+                ("engine.boost.cluster_mbar", 0, None),
+                ("engine.intake_temp_c", 0, None),
+                ("engine.injection_ms", 2, None),
+                ("engine.oil_temp_c", 0, None),
+                ("engine.maf_gs", 1, None),
+                ("engine.ignition_timing_deg", 1, None),
+                ("engine.fuel_rail.actual_bar", 0, None),
+            ],
+        ),
+        page(
+            "Cruise",
+            &[
+                ("engine.coolant_c", 0, None),
+                ("engine.oil_temp_c", 0, None),
+                ("ambient.outside_temp_c", 1, None),
+                ("power.battery_v", 1, None),
+                ("fuel.range_km", 0, None),
+                ("fuel.consumption_l100km", 1, None),
+                ("fuel.level_l", 0, None),
+                ("engine.boost.cluster_mbar", 0, None),
+            ],
+        ),
+        page(
+            "Temps",
+            &[
+                ("engine.coolant_c", 0, None),
+                ("engine.oil_temp_c", 0, None),
+                ("engine.intake_temp_c", 0, None),
+                ("engine.exhaust_temp.projected_c", 0, None),
+                ("trans.clutch_oil_temp_c", 0, Some("clutch")),
+                ("trans.fluid_temp_c", 0, Some("gear")),
+                ("awd.oil_temp_c", 0, Some("awd")),
+                ("awd.plate_temp_c", 0, Some("awd")),
+            ],
+        ),
+        page(
+            "Boost",
+            &[
+                ("engine.boost.actual", 0, None),
+                ("engine.boost.specified", 0, Some("target")),
+                ("engine.n75_duty_pct", 0, Some("valve")),
+                ("engine.intake_temp_c", 0, None),
+                ("engine.timing_retard.cyl1_deg", 1, None),
+                ("engine.timing_retard.cyl2_deg", 1, None),
+                ("engine.timing_retard.cyl3_deg", 1, None),
+                ("engine.timing_retard.cyl4_deg", 1, None),
+            ],
+        ),
+        page(
+            "Fuel",
+            &[
+                ("engine.fuel_rail.actual_bar", 0, None),
+                ("engine.fuel_rail.specified_bar", 0, Some("target")),
+                ("engine.fuel_pump_pct", 0, None),
+                ("engine.injection_ms", 2, None),
+                ("engine.lambda.actual", 3, None),
+                ("engine.lambda.specified", 3, Some("target")),
+                ("engine.maf_gs", 1, None),
+                ("engine.exhaust_temp.projected_c", 0, None),
+            ],
+        ),
+        page(
+            "Driveline",
+            &[
+                ("trans.k1.pressure_bar", 1, Some("clutch")),
+                ("trans.k2.pressure_bar", 1, Some("clutch")),
+                ("trans.clutch_oil_temp_c", 0, Some("clutch")),
+                ("trans.k1.shaft_rpm", 0, Some("gear")),
+                ("awd.estimated_torque_nm", 0, Some("awd")),
+                ("awd.oil_pressure_bar", 1, Some("awd")),
+                ("awd.valve_opening_pct", 0, Some("valve")),
+                ("awd.plate_temp_c", 0, Some("awd")),
+            ],
+        ),
+    ]
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReadingCfg {
@@ -800,6 +900,15 @@ impl Config {
         )
     }
 
+    /// The readings pages: as set; with neither `pages` nor the old `readings`
+    /// set, [`default_pages`].
+    pub fn dis_pages(&self) -> Vec<PageCfg> {
+        match (&self.dis.pages[..], &self.dis.readings) {
+            ([], None) => default_pages(),
+            (p, _) => p.to_vec(),
+        }
+    }
+
     pub fn readings(&self) -> Vec<Reading> {
         match &self.dis.readings {
             None => carpi_core::display::default_readings(),
@@ -818,8 +927,7 @@ impl Config {
                 enabled: self.dis.enabled,
                 readings: self.readings(),
                 pages: self
-                    .dis
-                    .pages
+                    .dis_pages()
                     .iter()
                     .map(|p| carpi_core::DisPage {
                         name: p.name.clone(),
@@ -990,6 +1098,25 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_dis_pages_fit_and_are_known() {
+        let cat = carpi_diag::Catalog::seed();
+        let cfg = Config::fallback();
+        let pages = cfg.dis_pages();
+        assert_eq!(pages[0].name, "Readings");
+        assert!(pages.len() <= 6);
+        for p in &pages {
+            assert!(p.cells.len() <= 8, "{}", p.name);
+            for c in &p.cells {
+                assert!(cat.get(&c.key).is_some(), "{}: {}", p.name, c.key);
+            }
+        }
+        // The old single page still wins when it's set.
+        let mut old = Config::fallback();
+        old.dis.readings = Some(Vec::new());
+        assert!(old.dis_pages().is_empty());
+    }
 
     #[test]
     fn default_buses_use_stable_ican_name() {

@@ -51,8 +51,7 @@ pub fn get(cfg: &Config) -> Settings {
                 crate::config::DisPage::Media => carpi_proto::DisPage::Media,
             },
             pages: cfg
-                .dis
-                .pages
+                .dis_pages()
                 .iter()
                 .map(|p| carpi_proto::DisPageSetting {
                     name: p.name.clone(),

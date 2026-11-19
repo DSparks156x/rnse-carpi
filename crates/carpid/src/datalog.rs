@@ -85,27 +85,135 @@ struct ProfilesFile {
     profiles: Vec<DatalogProfile>,
 }
 
-/// What there is before anything is saved.
+/// What there is before anything is saved. Diag-heavy profiles keep to three
+/// reads on one module (about 4.4 Hz each), so they run at 5 Hz.
 fn defaults() -> Vec<DatalogProfile> {
-    vec![DatalogProfile {
-        name: "Boost".into(),
-        values: [
-            "engine.rpm",
-            "engine.load_pct",
-            "engine.throttle_pct",
-            "engine.pedal_pct",
-            "engine.boost.actual",
-            "engine.boost.specified",
-            "engine.n75_duty_pct",
-            "engine.ignition_timing_deg",
-            "engine.intake_temp_c",
-            "vehicle.speed_kmh",
-        ]
-        .map(String::from)
-        .to_vec(),
-        rate_hz: 10,
+    let p = |name: &str, rate_hz, values: &[&str]| DatalogProfile {
+        name: name.into(),
+        values: values.iter().map(|v| v.to_string()).collect(),
+        rate_hz,
         labels: Vec::new(),
-    }]
+    };
+    vec![
+        // Engine 3, 115, 118.
+        p(
+            "Pull",
+            5,
+            &[
+                "engine.rpm",
+                "vehicle.speed_kmh",
+                "engine.throttle_pct",
+                "engine.load_pct",
+                "engine.maf_gs",
+                "engine.boost.actual",
+                "engine.boost.specified",
+                "engine.n75_duty_pct",
+                "engine.intake_temp_c",
+                "engine.ignition_timing_deg",
+            ],
+        ),
+        // Engine 20, 3, 115/118.
+        p(
+            "Knock",
+            5,
+            &[
+                "engine.rpm",
+                "engine.load_pct",
+                "engine.ignition_timing_deg",
+                "engine.timing_retard.cyl1_deg",
+                "engine.timing_retard.cyl2_deg",
+                "engine.timing_retard.cyl3_deg",
+                "engine.timing_retard.cyl4_deg",
+                "engine.intake_temp_c",
+                "engine.coolant_c",
+            ],
+        ),
+        // Engine 106, 31, 2.
+        p(
+            "Fuel",
+            5,
+            &[
+                "engine.rpm",
+                "engine.load_pct",
+                "engine.maf_gs",
+                "engine.injection_ms",
+                "engine.fuel_rail.actual_bar",
+                "engine.fuel_rail.specified_bar",
+                "engine.fuel_pump_pct",
+                "engine.lambda.actual",
+                "engine.lambda.specified",
+            ],
+        ),
+        // DSG 11, 12, 19.
+        p(
+            "DSG",
+            5,
+            &[
+                "engine.rpm",
+                "vehicle.speed_kmh",
+                "trans.selector",
+                "trans.k1.pressure_bar",
+                "trans.k2.pressure_bar",
+                "trans.k1.shaft_rpm",
+                "trans.k2.shaft_rpm",
+                "trans.k1.torque_specified_nm",
+                "trans.k2.torque_specified_nm",
+                "trans.clutch_oil_temp_c",
+            ],
+        ),
+        // Haldex 3, 1; the rest is on the bus.
+        p(
+            "Haldex",
+            5,
+            &[
+                "vehicle.speed_kmh",
+                "steering.angle_deg",
+                "vehicle.yaw_dps",
+                "wheels.fl_kmh",
+                "wheels.fr_kmh",
+                "wheels.rl_kmh",
+                "wheels.rr_kmh",
+                "awd.mode",
+                "awd.commanded_nm",
+                "awd.estimated_torque_nm",
+                "awd.oil_pressure_bar",
+                "awd.valve_opening_pct",
+                "awd.plate_temp_c",
+            ],
+        ),
+        // Long drives: every module's temperatures.
+        p(
+            "Thermal",
+            1,
+            &[
+                "vehicle.speed_kmh",
+                "ambient.outside_temp_c",
+                "engine.coolant_c",
+                "engine.oil_temp_c",
+                "engine.intake_temp_c",
+                "engine.exhaust_temp.projected_c",
+                "engine.fan_pct",
+                "trans.fluid_temp_c",
+                "trans.clutch_oil_temp_c",
+                "awd.oil_temp_c",
+                "awd.plate_temp_c",
+            ],
+        ),
+        // All on the bus.
+        p(
+            "Electrical",
+            2,
+            &[
+                "power.battery_v",
+                "power.battery_soc_pct",
+                "engine.generator_pct",
+                "power.generator_target_v",
+                "power.bdm_v",
+                "power.load_shed_stage",
+                "engine.rpm",
+            ],
+        ),
+    ]
 }
 
 /// Profiles from `path`: the defaults when there's no file. A file that
@@ -1112,6 +1220,22 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn default_profiles_are_known_and_cheap() {
+        let cat = Catalog::seed();
+        for p in defaults() {
+            let p = check(p).unwrap();
+            for v in &p.values {
+                assert!(cat.get(v).is_some(), "{}: {v}", p.name);
+            }
+            let l = load(&cat, &p.values, p.rate_hz);
+            assert!(l.diag_groups <= 4, "{}: {l:?}", p.name);
+            if p.rate_hz >= 5 {
+                assert!(l.diag_groups <= 3, "{}: {l:?}", p.name);
+            }
+        }
+    }
+
+    #[test]
     fn header_rows_and_marks() {
         let mut p = profile("x", &["engine.rpm", "a,b", "engine.boost.actual"], 1);
         assert_eq!(
@@ -1180,7 +1304,7 @@ pub(crate) mod tests {
         // No file: the defaults.
         let (f, broken) = read_profiles(&path);
         assert!(!broken);
-        assert_eq!(f.profiles[0].name, "Boost");
+        assert_eq!(f.profiles[0].name, "Pull");
 
         let p = check(profile(
             "  Haldex ",
@@ -1471,15 +1595,19 @@ pub(crate) mod tests {
                 .map(|p| p.profile.name)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(names(&d), ["Boost"]);
+        let first = names(&d);
+        assert_eq!(first[0], "Pull");
         d.save(profile("Trip", &["fuel.level_l"], 1), None).unwrap();
         assert!(
-            d.save(profile("Trip", &[], 1), Some("Boost".into()))
+            d.save(profile("Trip", &[], 1), Some("Pull".into()))
                 .is_err()
         );
-        d.save(profile("Engine", &["engine.rpm"], 2), Some("Boost".into()))
+        d.save(profile("Engine", &["engine.rpm"], 2), Some("Pull".into()))
             .unwrap();
-        assert_eq!(names(&d), ["Engine", "Trip"]);
+        let mut want = first.clone();
+        want[0] = "Engine".into();
+        want.push("Trip".into());
+        assert_eq!(names(&d), want);
         assert!(d.start("Nope").await.is_err());
         d.save(profile("Empty", &[], 1), None).unwrap();
         assert!(
@@ -1494,7 +1622,9 @@ pub(crate) mod tests {
             mpsc::channel(1).0,
             Arc::new(CommandHub::default()),
         );
-        assert_eq!(names(&again), ["Engine", "Empty"]);
+        want.retain(|n| n != "Trip");
+        want.push("Empty".into());
+        assert_eq!(names(&again), want);
         assert_eq!(again.status().profiles[0].load.bus_values, 1);
     }
 }
