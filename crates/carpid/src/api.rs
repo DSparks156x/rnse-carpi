@@ -552,7 +552,7 @@ mod tests {
         let Response::Datalog { status } = r else {
             panic!("{r:?}")
         };
-        assert_eq!(status.profiles.len(), 2);
+        assert_eq!(status.profiles.last().unwrap().profile.name, "Idle");
 
         let mut toasts = Vec::new();
         s.write_all(&carpi_proto::encode(&dl(DatalogAction::Start {
