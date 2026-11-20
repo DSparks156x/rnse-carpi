@@ -25,6 +25,7 @@ with tempfile.TemporaryDirectory() as directory, patch.object(options.os, "chown
         path = Path(user.pw_dir) / ".config/LIVI/config.json"
         config = json.loads(path.read_text())
         assert config["kiosk"] == {"main": True, "cluster": False, "aux": False}
+        assert config["androidAuto"] == {"keys": "rotary"}
         if video:
             assert tuple(config[k] for k in (
                 "mainScreenWidth", "mainScreenHeight", "projectionWidth", "projectionHeight"
