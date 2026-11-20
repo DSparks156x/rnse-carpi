@@ -9,6 +9,7 @@ mod frame;
 pub mod j2534;
 mod port;
 pub mod recorder;
+pub mod sim;
 mod tx;
 
 pub use frame::{Frame, RxFrame};

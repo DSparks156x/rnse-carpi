@@ -1,5 +1,6 @@
 //! Local API server: one Unix socket, length-prefixed JSON (see carpi-proto).
-//! Same-user only, by socket file permissions (0600).
+//! Same-user only, by socket file permissions (0600). `tcp:<host>:<port>` as
+//! the socket listens on TCP instead, for the desktop simulator.
 //!
 //! Each connection gets a reader loop, a writer task, and one task per
 //! subscription. Requests go to the core loop; subscriptions poll it for
@@ -22,7 +23,6 @@ use tokio::sync::mpsc;
 
 /// Readings that differ from what this subscriber last saw. Age alone
 /// doesn't count as a change.
-#[cfg_attr(not(unix), allow(dead_code))]
 pub fn diff(seen: &mut HashMap<String, Option<Value>>, items: Vec<Reading>) -> Vec<Reading> {
     items
         .into_iter()
@@ -36,8 +36,102 @@ pub fn diff(seen: &mut HashMap<String, Option<Value>>, items: Vec<Reading>) -> V
         .collect()
 }
 
-#[cfg(unix)]
+/// Listens on `path`, or on TCP when it reads `tcp:<host>:<port>` (the
+/// desktop simulator; no file permissions guard it, so keep it on loopback).
 pub fn spawn(
+    path: &Path,
+    tx: mpsc::Sender<Msg>,
+    jobs: Arc<Jobs>,
+    captures: Captures,
+    datalog: Datalog,
+) -> anyhow::Result<()> {
+    if let Some(addr) = tcp_addr(path) {
+        return spawn_tcp(addr, tx, jobs, captures, datalog);
+    }
+    spawn_unix(path, tx, jobs, captures, datalog)
+}
+
+/// `tcp:<host>:<port>` from the socket setting.
+pub fn tcp_addr(path: &Path) -> Option<String> {
+    path.to_str()?
+        .strip_prefix("tcp:")
+        .map(|a| a.trim().to_string())
+}
+
+/// Every connection gets the next number and its own serve task.
+fn accept_loop<S, F>(
+    mut accept: F,
+    tx: mpsc::Sender<Msg>,
+    jobs: Arc<Jobs>,
+    captures: Captures,
+    datalog: Datalog,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
+    F: FnMut() -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<S>> + Send>>
+        + Send
+        + 'static,
+{
+    tokio::spawn(async move {
+        let mut next_conn = 1u64;
+        loop {
+            match accept().await {
+                Ok(stream) => {
+                    let conn = next_conn;
+                    next_conn += 1;
+                    let tx = tx.clone();
+                    let jobs = jobs.clone();
+                    let captures = captures.clone();
+                    let datalog = datalog.clone();
+                    tokio::spawn(async move {
+                        serve(conn, stream, tx.clone(), jobs, captures, datalog).await;
+                        let _ = tx.send(Msg::ConnClosed(conn)).await;
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("API accept failed: {e}");
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
+        }
+    });
+}
+
+fn spawn_tcp(
+    addr: String,
+    tx: mpsc::Sender<Msg>,
+    jobs: Arc<Jobs>,
+    captures: Captures,
+    datalog: Datalog,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let std_listener =
+        std::net::TcpListener::bind(&addr).with_context(|| format!("binding tcp:{addr}"))?;
+    let local = std_listener.local_addr()?;
+    if !local.ip().is_loopback() {
+        tracing::warn!("API on tcp:{local} is reachable from the network, with no access control");
+    }
+    std_listener.set_nonblocking(true)?;
+    let listener = Arc::new(tokio::net::TcpListener::from_std(std_listener)?);
+    tracing::info!("API on tcp:{local}");
+    accept_loop(
+        move || {
+            let l = listener.clone();
+            Box::pin(async move {
+                let (s, _) = l.accept().await?;
+                let _ = s.set_nodelay(true);
+                Ok(s)
+            })
+        },
+        tx,
+        jobs,
+        captures,
+        datalog,
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+fn spawn_unix(
     path: &Path,
     tx: mpsc::Sender<Msg>,
     jobs: Arc<Jobs>,
@@ -58,47 +152,50 @@ pub fn spawn(
         UnixListener::bind(path).with_context(|| format!("binding {}", path.display()))?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     tracing::info!("API on {}", path.display());
-
-    tokio::spawn(async move {
-        let mut next_conn = 1u64;
-        loop {
-            match listener.accept().await {
-                Ok((stream, _)) => {
-                    let conn = next_conn;
-                    next_conn += 1;
-                    let tx = tx.clone();
-                    let jobs = jobs.clone();
-                    let captures = captures.clone();
-                    let datalog = datalog.clone();
-                    tokio::spawn(async move {
-                        serve(conn, stream, tx.clone(), jobs, captures, datalog).await;
-                        let _ = tx.send(Msg::ConnClosed(conn)).await;
-                    });
-                }
-                Err(e) => {
-                    tracing::warn!("API accept failed: {e}");
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                }
-            }
-        }
-    });
+    let listener = Arc::new(listener);
+    accept_loop(
+        move || {
+            let l = listener.clone();
+            Box::pin(async move { l.accept().await.map(|(s, _)| s) })
+        },
+        tx,
+        jobs,
+        captures,
+        datalog,
+    );
     Ok(())
 }
 
-#[cfg(unix)]
-async fn serve(
+#[cfg(not(unix))]
+fn spawn_unix(
+    path: &Path,
+    _tx: mpsc::Sender<Msg>,
+    _jobs: Arc<Jobs>,
+    _captures: Captures,
+    _datalog: Datalog,
+) -> anyhow::Result<()> {
+    tracing::warn!(
+        "no Unix sockets on this platform; API at {} disabled (use tcp:127.0.0.1:<port>)",
+        path.display()
+    );
+    Ok(())
+}
+
+async fn serve<S>(
     conn: u64,
-    stream: tokio::net::UnixStream,
+    stream: S,
     tx: mpsc::Sender<Msg>,
     jobs: Arc<Jobs>,
     captures: Captures,
     datalog: Datalog,
-) {
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
+{
     use carpi_proto::{DiagAction, Request, Response};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::oneshot;
 
-    let (mut rd, mut wr) = stream.into_split();
+    let (mut rd, mut wr) = tokio::io::split(stream);
     let (out_tx, mut out_rx) = mpsc::channel::<Response>(64);
     let writer = tokio::spawn(async move {
         while let Some(resp) = out_rx.recv().await {
@@ -318,7 +415,6 @@ async fn serve(
 
 /// Relays a job's events to the connection until the job ends. Weak: a
 /// closed connection mustn't wait for the job.
-#[cfg(unix)]
 fn forward_job(
     job: u32,
     mut rx: mpsc::UnboundedReceiver<carpi_proto::JobEvent>,
@@ -336,13 +432,11 @@ fn forward_job(
 
 /// Drops a subscription's diag subscriptions when its task ends or is
 /// aborted. If the core queue is full the leases run out by themselves.
-#[cfg(unix)]
 struct DiagSubs {
     ids: Vec<carpi_core::DiagSubId>,
     tx: mpsc::Sender<Msg>,
 }
 
-#[cfg(unix)]
 impl Drop for DiagSubs {
     fn drop(&mut self) {
         if !self.ids.is_empty() {
@@ -353,7 +447,6 @@ impl Drop for DiagSubs {
     }
 }
 
-#[cfg(unix)]
 async fn run_sub(
     sub: u32,
     prefixes: Vec<String>,
@@ -406,28 +499,11 @@ async fn run_sub(
     }
 }
 
-#[cfg(unix)]
 pub fn cleanup(path: &Path) {
-    let _ = std::fs::remove_file(path);
+    if tcp_addr(path).is_none() {
+        let _ = std::fs::remove_file(path);
+    }
 }
-
-#[cfg(not(unix))]
-pub fn spawn(
-    path: &Path,
-    _tx: mpsc::Sender<Msg>,
-    _jobs: Arc<Jobs>,
-    _captures: Captures,
-    _datalog: Datalog,
-) -> anyhow::Result<()> {
-    tracing::warn!(
-        "no Unix sockets on this platform; API at {} disabled",
-        path.display()
-    );
-    Ok(())
-}
-
-#[cfg(not(unix))]
-pub fn cleanup(_path: &Path) {}
 
 #[cfg(test)]
 mod tests {

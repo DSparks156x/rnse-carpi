@@ -15,18 +15,29 @@ enum Inner {
     J2534(std::sync::Arc<crate::j2534::Device>),
     #[cfg(not(target_os = "linux"))]
     None,
+    Sim(crate::sim::SimTx),
 }
 
 impl TxPort {
-    #[cfg(target_os = "linux")]
+    /// SocketCAN, or the simulator's virtual bus when `CARPI_SIM_CAN` is set.
     pub fn open(iface: &str) -> io::Result<Self> {
+        match crate::sim::hub() {
+            Some(addr) => Ok(TxPort {
+                inner: Inner::Sim(crate::sim::SimTx::open(&addr, iface)?),
+            }),
+            None => Self::open_socket(iface),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn open_socket(iface: &str) -> io::Result<Self> {
         Ok(TxPort {
             inner: Inner::Socket(socketcan::tokio::CanSocket::open(iface)?),
         })
     }
 
     #[cfg(not(target_os = "linux"))]
-    pub fn open(iface: &str) -> io::Result<Self> {
+    fn open_socket(iface: &str) -> io::Result<Self> {
         let _ = Inner::None;
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -58,6 +69,7 @@ impl TxPort {
             }
             #[cfg(windows)]
             Inner::J2534(dev) => dev.write(frame),
+            Inner::Sim(s) => s.send(frame).await,
             #[cfg(not(target_os = "linux"))]
             Inner::None => {
                 let _ = frame;

@@ -1,0 +1,528 @@
+// rnse-sim: virtual RNS-E faceplate, wheel and stalk, the cluster DIS, the
+// car's state and a LIVI stand-in, around the real carpid.
+
+import { Button, CheckBox, Slider, ComboBox, SpinBox } from "std-widgets.slint";
+
+export global Theme {
+    out property <color> bg: #000000;
+    out property <color> paper: #121212;
+    out property <color> surface: #ffffff0f;
+    out property <color> text: #ffffff;
+    out property <color> dim: #ffffffbb;
+    out property <color> faint: #ffffff66;
+    out property <color> primary: #00adad;
+    out property <color> held: #009494;
+    out property <color> warn: #e0a030;
+    out property <color> bad: #e05050;
+    out property <color> lcd: #f0f4ff;
+}
+
+component Title inherits Text {
+    color: Theme.primary;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+component Note inherits Text {
+    color: Theme.dim;
+    font-size: 11px;
+    wrap: word-wrap;
+}
+
+component Card inherits Rectangle {
+    background: Theme.paper;
+    border-radius: 8px;
+    in property <string> title;
+    VerticalLayout {
+        padding: 10px;
+        spacing: 6px;
+        if root.title != "": Title { text: root.title; }
+        @children
+    }
+}
+
+// A key that is held while the pointer is down, so press length is real.
+component Key inherits Rectangle {
+    in property <string> label;
+    in property <string> name;
+    in property <bool> lit;
+    callback edge(string, bool);
+    min-width: 56px;
+    min-height: 34px;
+    border-radius: 6px;
+    background: ta.pressed || root.lit ? Theme.held : Theme.surface;
+    border-width: 1px;
+    border-color: #ffffff22;
+    Text {
+        text: root.label;
+        color: Theme.text;
+        font-size: 12px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        pointer-event(ev) => {
+            if ev.button == PointerEventButton.left {
+                if ev.kind == PointerEventKind.down { root.edge(root.name, true); }
+                if ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel { root.edge(root.name, false); }
+            }
+        }
+    }
+}
+
+component Knob inherits Rectangle {
+    in property <bool> lit;
+    in property <int> angle;
+    callback edge(string, bool);
+    callback scrolled(length);
+    width: 120px;
+    height: 120px;
+    border-radius: self.width / 2;
+    background: ta.pressed || root.lit ? Theme.held : #2a2a2a;
+    border-width: 3px;
+    border-color: #555;
+    // Pointer mark, turns with the detents.
+    Rectangle {
+        x: parent.width / 2 - 3px + (parent.width / 2 - 16px) * sin(root.angle * 15deg);
+        y: parent.height / 2 - 3px - (parent.height / 2 - 16px) * cos(root.angle * 15deg);
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: Theme.primary;
+    }
+    Text {
+        text: "PUSH";
+        color: Theme.faint;
+        font-size: 10px;
+    }
+    ta := TouchArea {
+        pointer-event(ev) => {
+            if ev.button == PointerEventButton.left {
+                if ev.kind == PointerEventKind.down { root.edge("enter", true); }
+                if ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel { root.edge("enter", false); }
+            }
+        }
+        scroll-event(ev) => {
+            root.scrolled(ev.delta-y);
+            accept
+        }
+    }
+}
+
+// Newest-first text, clipped at the bottom.
+component LogBox inherits Rectangle {
+    in property <string> text;
+    in property <color> ink: Theme.text;
+    in property <length> font-size: 11px;
+    clip: true;
+    Text {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        text: root.text;
+        color: root.ink;
+        font-size: root.font-size;
+        font-family: "Consolas";
+        wrap: word-wrap;
+        vertical-alignment: top;
+    }
+}
+
+component Toggle inherits CheckBox {
+    in property <string> name;
+    callback flip(string, bool);
+    toggled => { self.flip(self.name, self.checked); }
+}
+
+component Labelled inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    spacing: 6px;
+    Text { text: root.label; color: Theme.dim; font-size: 12px; min-width: 92px; vertical-alignment: center; }
+    @children
+    Text { text: root.value; color: Theme.text; font-size: 12px; min-width: 64px; horizontal-alignment: right; vertical-alignment: center; }
+}
+
+export component SimWindow inherits Window {
+    title: "rnse-sim: RNS-E, cluster and car around carpid";
+    background: Theme.bg;
+    preferred-width: 1480px;
+    preferred-height: 900px;
+    default-font-size: 12px;
+
+    // --- out to Rust ---
+    callback key-edge(string, bool);
+    callback knob-scroll(length);
+    callback knob-spin(int);
+    callback tap(string, int);
+    callback car-bool(string, bool);
+    callback car-num(string, float);
+    callback car-text(string, string);
+    callback livi(string, string);
+    callback restart-carpid();
+    callback clear-log();
+
+    // --- in from Rust ---
+    in property <image> dis-centre;
+    in property <image> dis-top;
+    in property <string> dis-status;
+    in property <string> dis-notes;
+    in property <bool> dis-owned;
+    in property <string> rnse-label;
+    in property <string> rnse-last;
+    in property <string> rnse-sub;
+    in property <string> knob-readout;
+    in property <int> knob-angle;
+    // Held keys, in main.rs KEY_ORDER.
+    in property <[bool]> held;
+    in property <string> events;
+    in property <string> carpid-log;
+    in property <string> carpid-status;
+    in property <string> livi-status;
+    in property <string> values;
+    in property <string> can-log;
+    in property <string> hub-status;
+    // The real LIVI runs (Linux): the stand-in's controls are moot.
+    in property <bool> real-livi;
+
+    // --- local UI state the Rust side reads through callbacks ---
+    in-out property <float> spin-steps: 8;
+    in-out property <float> spin-rate: 12;
+    in-out property <float> speed: 0;
+    in-out property <float> steer: 0;
+    in-out property <float> nav-dist: 350;
+    in-out property <int> gesture-ms: 700;
+
+    forward-focus: keys;
+    keys := FocusScope {
+        key-pressed(ev) => {
+            if ev.text == Key.LeftArrow { root.key-edge("prev", true); return accept; }
+            if ev.text == Key.RightArrow { root.key-edge("next", true); return accept; }
+            if ev.text == Key.UpArrow { root.key-edge("up", true); return accept; }
+            if ev.text == Key.DownArrow { root.key-edge("down", true); return accept; }
+            if ev.text == Key.Return || ev.text == " " { root.key-edge("enter", true); return accept; }
+            if ev.text == Key.Backspace || ev.text == Key.Escape { root.key-edge("return", true); return accept; }
+            if ev.text == "]" || ev.text == "." { root.knob-spin(1); return accept; }
+            if ev.text == "[" || ev.text == "," { root.knob-spin(-1); return accept; }
+            if ev.text == "w" { root.key-edge("w-up", true); return accept; }
+            if ev.text == "s" { root.key-edge("w-down", true); return accept; }
+            if ev.text == "q" { root.key-edge("w-click", true); return accept; }
+            if ev.text == "e" { root.key-edge("w-mode", true); return accept; }
+            if ev.text == Key.PageUp { root.key-edge("s-up", true); return accept; }
+            if ev.text == Key.PageDown { root.key-edge("s-down", true); return accept; }
+            reject
+        }
+        key-released(ev) => {
+            if ev.text == Key.LeftArrow { root.key-edge("prev", false); return accept; }
+            if ev.text == Key.RightArrow { root.key-edge("next", false); return accept; }
+            if ev.text == Key.UpArrow { root.key-edge("up", false); return accept; }
+            if ev.text == Key.DownArrow { root.key-edge("down", false); return accept; }
+            if ev.text == Key.Return || ev.text == " " { root.key-edge("enter", false); return accept; }
+            if ev.text == Key.Backspace || ev.text == Key.Escape { root.key-edge("return", false); return accept; }
+            if ev.text == "w" { root.key-edge("w-up", false); return accept; }
+            if ev.text == "s" { root.key-edge("w-down", false); return accept; }
+            if ev.text == "q" { root.key-edge("w-click", false); return accept; }
+            if ev.text == "e" { root.key-edge("w-mode", false); return accept; }
+            if ev.text == Key.PageUp { root.key-edge("s-up", false); return accept; }
+            if ev.text == Key.PageDown { root.key-edge("s-down", false); return accept; }
+            reject
+        }
+
+    HorizontalLayout {
+        padding: 10px;
+        spacing: 10px;
+
+        // ===== RNS-E =====
+        VerticalLayout {
+            spacing: 10px;
+            width: 470px;
+
+            Card {
+                title: "RNS-E screen (what carpid/LIVI did)";
+                Rectangle {
+                    height: 170px;
+                    background: #050a0f;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: #ffffff22;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 4px;
+                        Text { text: root.rnse-label; color: Theme.faint; font-size: 11px; }
+                        Text {
+                            text: root.rnse-last;
+                            color: Theme.text;
+                            font-size: 22px;
+                            wrap: word-wrap;
+                            vertical-stretch: 1;
+                        }
+                        Text { text: root.rnse-sub; color: Theme.dim; font-size: 11px; wrap: word-wrap; }
+                    }
+                }
+            }
+
+            Card {
+                title: "Faceplate (0x461). Hold for long; keyboard: arrows, Enter, Backspace, [ ]";
+                HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        spacing: 6px;
+                        Key { label: "NAV"; name: "nav"; lit: root.held[7]; edge(n, d) => { root.key-edge(n, d); } }
+                        Key { label: "INFO"; name: "info"; lit: root.held[11]; edge(n, d) => { root.key-edge(n, d); } }
+                        Key { label: "CAR"; name: "car"; lit: root.held[12]; edge(n, d) => { root.key-edge(n, d); } }
+                        Key { label: "SETUP"; name: "setup"; lit: root.held[6]; edge(n, d) => { root.key-edge(n, d); } }
+                    }
+                    VerticalLayout {
+                        spacing: 6px;
+                        alignment: center;
+                        HorizontalLayout {
+                            alignment: center;
+                            Key { label: "▲ UP"; name: "up"; lit: root.held[2]; edge(n, d) => { root.key-edge(n, d); } }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: center;
+                            Key { label: "◀◀ PREV"; name: "prev"; lit: root.held[0]; edge(n, d) => { root.key-edge(n, d); } }
+                            Knob {
+                                lit: root.held[4];
+                                angle: root.knob-angle;
+                                edge(n, d) => { root.key-edge(n, d); }
+                                scrolled(dy) => { root.knob-scroll(dy); }
+                            }
+                            Key { label: "NEXT ▶▶"; name: "next"; lit: root.held[1]; edge(n, d) => { root.key-edge(n, d); } }
+                        }
+                        HorizontalLayout {
+                            alignment: center;
+                            Key { label: "▼ DOWN"; name: "down"; lit: root.held[3]; edge(n, d) => { root.key-edge(n, d); } }
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 6px;
+                        Key { label: "TEL"; name: "tel"; lit: root.held[8]; edge(n, d) => { root.key-edge(n, d); } }
+                        Key { label: "MEDIA"; name: "media"; lit: root.held[9]; edge(n, d) => { root.key-edge(n, d); } }
+                        Key { label: "NAME"; name: "name"; lit: root.held[10]; edge(n, d) => { root.key-edge(n, d); } }
+                        Key { label: "RETURN"; name: "return"; lit: root.held[5]; edge(n, d) => { root.key-edge(n, d); } }
+                    }
+                }
+                Note { text: "Knob: mouse wheel over it, or [ and ] (hold for the OS key repeat). Push = click it."; }
+            }
+
+            Card {
+                title: "Knob spin (acceleration)";
+                Labelled {
+                    label: "Detents";
+                    value: Math.round(root.spin-steps);
+                    Slider { minimum: 1; maximum: 40; value <=> root.spin-steps; }
+                }
+                Labelled {
+                    label: "Rate /s";
+                    value: Math.round(root.spin-rate);
+                    Slider { minimum: 1; maximum: 80; value <=> root.spin-rate; }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Button { text: "◀ spin CCW"; clicked => { root.knob-spin(-Math.round(root.spin-steps)); } }
+                    Button { text: "spin CW ▶"; clicked => { root.knob-spin(Math.round(root.spin-steps)); } }
+                    Text { text: "frames/detent"; color: Theme.dim; vertical-alignment: center; }
+                    SpinBox { minimum: 1; maximum: 4; value: 1; edited(v) => { root.car-num("knob-frames", v); } }
+                }
+                Note { text: root.knob-readout; }
+            }
+
+            Card {
+                title: "Timed press";
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text { text: "hold ms"; color: Theme.dim; vertical-alignment: center; }
+                    SpinBox { minimum: 50; maximum: 15000; step-size: 50; value <=> root.gesture-ms; }
+                    Button { text: "short"; clicked => { root.gesture-ms = 150; } }
+                    Button { text: "long"; clicked => { root.gesture-ms = 700; } }
+                    Button { text: "extended"; clicked => { root.gesture-ms = 10500; } }
+                }
+                HorizontalLayout {
+                    spacing: 4px;
+                    for k in ["prev", "next", "up", "down", "enter", "return", "info", "car"]: Button {
+                        text: k;
+                        clicked => { root.tap(k, root.gesture-ms); }
+                    }
+                }
+            }
+        }
+
+        // ===== Cluster + wheel =====
+        VerticalLayout {
+            spacing: 10px;
+            width: 440px;
+
+            Card {
+                title: "Cluster DIS (white, 128x96 1-bit; top lines 2x8 cells)";
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 288px;
+                        height: 84px;
+                        background: #000;
+                        Image { source: root.dis-top; width: 288px; height: 84px; image-rendering: pixelated; }
+                    }
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 392px;
+                        height: 296px;
+                        background: #000;
+                        border-width: 2px;
+                        border-color: root.dis-owned ? Theme.primary : #333;
+                        Image {
+                            source: root.dis-centre;
+                            width: 384px;
+                            height: 288px;
+                            image-rendering: pixelated;
+                            opacity: root.dis-owned ? 1.0 : 0.35;
+                        }
+                    }
+                }
+                Note { text: root.dis-status; }
+                Text { text: root.dis-notes; color: Theme.warn; font-size: 11px; wrap: word-wrap; }
+            }
+
+            Card {
+                title: "Steering wheel (0x5C3) and stalk (0x2C1). Keys: w s q e, PgUp PgDn";
+                HorizontalLayout {
+                    spacing: 6px;
+                    Key { label: "▲ wheel"; name: "w-up"; lit: root.held[13]; edge(n, d) => { root.key-edge(n, d); } }
+                    Key { label: "▼ wheel"; name: "w-down"; lit: root.held[14]; edge(n, d) => { root.key-edge(n, d); } }
+                    Key { label: "click"; name: "w-click"; lit: root.held[15]; edge(n, d) => { root.key-edge(n, d); } }
+                    Key { label: "MODE"; name: "w-mode"; lit: root.held[16]; edge(n, d) => { root.key-edge(n, d); } }
+                    Key { label: "PTT"; name: "w-ptt"; lit: root.held[17]; edge(n, d) => { root.key-edge(n, d); } }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Key { label: "vol +"; name: "w-volup"; lit: root.held[18]; edge(n, d) => { root.key-edge(n, d); } }
+                    Key { label: "vol −"; name: "w-voldown"; lit: root.held[19]; edge(n, d) => { root.key-edge(n, d); } }
+                    Key { label: "stalk ▲"; name: "s-up"; lit: root.held[21]; edge(n, d) => { root.key-edge(n, d); } }
+                    Key { label: "stalk ▼"; name: "s-down"; lit: root.held[22]; edge(n, d) => { root.key-edge(n, d); } }
+                }
+            }
+
+            Card {
+                title: "Routed (carpid log + AA commands)";
+                vertical-stretch: 1;
+                HorizontalLayout {
+                    Text { text: root.livi-status; color: Theme.dim; font-size: 11px; horizontal-stretch: 1; }
+                    Button { text: "clear"; clicked => { root.clear-log(); } }
+                }
+                LogBox { vertical-stretch: 1; min-height: 120px; text: root.events; }
+            }
+        }
+
+        // ===== Car + LIVI =====
+        VerticalLayout {
+            spacing: 10px;
+            horizontal-stretch: 1;
+
+            Card {
+                title: "Car";
+                HorizontalLayout {
+                    spacing: 8px;
+                    Toggle { text: "bus awake"; name: "awake"; checked: true; flip(n, v) => { root.car-bool(n, v); } }
+                    Toggle { text: "ignition"; name: "kl15"; checked: true; flip(n, v) => { root.car-bool(n, v); } }
+                    Toggle { text: "RNS-E on TV"; name: "on_tv"; checked: true; flip(n, v) => { root.car-bool(n, v); } }
+                    Toggle { text: "night"; name: "night"; flip(n, v) => { root.car-bool(n, v); } }
+                }
+                Labelled {
+                    label: "Speed km/h";
+                    value: Math.round(root.speed);
+                    Slider { minimum: 0; maximum: 250; value <=> root.speed; changed(v) => { root.car-num("speed", v); } }
+                }
+                Labelled {
+                    label: "Steering °";
+                    value: Math.round(root.steer);
+                    Slider { minimum: -540; maximum: 540; value <=> root.steer; changed(v) => { root.car-num("steer", v); } }
+                    Button { text: "0"; clicked => { root.steer = 0; root.car-num("steer", 0); } }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text { text: "Gear"; color: Theme.dim; vertical-alignment: center; }
+                    ComboBox { model: ["P", "R", "N", "D", "S", "M"]; current-value: "P"; selected(v) => { root.car-text("gear", v); } }
+                    Text { text: "Units"; color: Theme.dim; vertical-alignment: center; }
+                    ComboBox { model: ["US", "metric"]; current-value: "US"; selected(v) => { root.car-text("units", v); } }
+                    Toggle { text: "handbrake"; name: "handbrake"; flip(n, v) => { root.car-bool(n, v); } }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Toggle { text: "side"; name: "side"; flip(n, v) => { root.car-bool(n, v); } }
+                    Toggle { text: "low"; name: "low"; flip(n, v) => { root.car-bool(n, v); } }
+                    Toggle { text: "high"; name: "high"; flip(n, v) => { root.car-bool(n, v); } }
+                    Toggle { text: "fog"; name: "fog"; flip(n, v) => { root.car-bool(n, v); } }
+                    Toggle { text: "◀ turn"; name: "turn_l"; flip(n, v) => { root.car-bool(n, v); } }
+                    Toggle { text: "turn ▶"; name: "turn_r"; flip(n, v) => { root.car-bool(n, v); } }
+                    Toggle { text: "hazard"; name: "hazard"; flip(n, v) => { root.car-bool(n, v); } }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Toggle { text: "door FL"; name: "door_fl"; flip(n, v) => { root.car-bool(n, v); } }
+                    Toggle { text: "door FR"; name: "door_fr"; flip(n, v) => { root.car-bool(n, v); } }
+                    Toggle { text: "RL"; name: "door_rl"; flip(n, v) => { root.car-bool(n, v); } }
+                    Toggle { text: "RR"; name: "door_rr"; flip(n, v) => { root.car-bool(n, v); } }
+                    Toggle { text: "hood"; name: "hood"; flip(n, v) => { root.car-bool(n, v); } }
+                }
+                Note { text: root.hub-status; }
+            }
+
+            if root.real-livi: Card {
+                title: "LIVI (real, own window)";
+                Note { text: "Focus, nav, media and calls come from LIVI itself. Keys carpid routes to LIVI's menus are typed into its window from Windows (uinput's stand-in under WSLg); AA keys go over the bridge as in the car. Right log: LIVI."; }
+            }
+            if !root.real-livi: Card {
+                title: "LIVI stand-in (what LIVI would push to carpid)";
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text { text: "Focus"; color: Theme.dim; vertical-alignment: center; }
+                    ComboBox { model: ["projection", "livi", "page:data", "page:car"]; current-value: "projection"; selected(v) => { root.livi("focus", v); } }
+                    Text { text: "Projection"; color: Theme.dim; vertical-alignment: center; }
+                    ComboBox { model: ["android_auto", "carplay", "none"]; current-value: "android_auto"; selected(v) => { root.livi("projection", v); } }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Toggle { text: "nav"; name: "nav"; flip(n, v) => { root.livi(n, v ? "on" : "off"); } }
+                    ComboBox {
+                        model: ["turn", "slight_turn", "sharp_turn", "u_turn", "straight", "roundabout_enter_and_exit", "fork", "merge", "on_ramp", "off_ramp", "destination"];
+                        current-value: "turn";
+                        selected(v) => { root.livi("maneuver", v); }
+                    }
+                    ComboBox { model: ["left", "right"]; current-value: "right"; selected(v) => { root.livi("side", v); } }
+                }
+                Labelled {
+                    label: "Distance m";
+                    value: Math.round(root.nav-dist);
+                    Slider { minimum: 0; maximum: 3000; value <=> root.nav-dist; changed(v) => { root.livi("distance", v); } }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Toggle { text: "media playing"; name: "media"; flip(n, v) => { root.livi(n, v ? "on" : "off"); } }
+                    Text { text: "Call"; color: Theme.dim; vertical-alignment: center; }
+                    ComboBox { model: ["none", "ringing", "active"]; current-value: "none"; selected(v) => { root.livi("call", v); } }
+                }
+            }
+
+            Card {
+                title: "carpid";
+                vertical-stretch: 1;
+                HorizontalLayout {
+                    Text { text: root.carpid-status; color: Theme.dim; font-size: 11px; horizontal-stretch: 1; wrap: word-wrap; }
+                    Button { text: "Restart carpid"; clicked => { root.restart-carpid(); } }
+                }
+                HorizontalLayout {
+                    vertical-stretch: 1;
+                    spacing: 8px;
+                    LogBox { horizontal-stretch: 2; min-height: 140px; text: root.carpid-log; ink: Theme.dim; font-size: 10px; }
+                    LogBox { horizontal-stretch: 1; text: root.values; font-size: 10px; }
+                }
+                Text { text: root.can-log; color: Theme.faint; font-size: 10px; font-family: "Consolas"; wrap: word-wrap; }
+            }
+        }
+    }
+    }
+}

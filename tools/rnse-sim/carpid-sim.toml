@@ -1,0 +1,45 @@
+# carpid config for rnse-sim. Written to tools/rnse-sim/work/carpid.toml on
+# first run; edit that copy, then press "Restart carpid" in the simulator.
+# Keys: [input] long_ms / extended_s / bindings (format: crates/carpid/src/config.rs).
+
+[bus.ican]
+iface = "ican"        # the simulator's virtual bus (CARPI_SIM_CAN)
+
+[bus.diag]
+iface = "ican"
+
+[api]
+socket = "set-by-rnse-sim"
+
+[logs]
+dir = "~/logs"        # ~ = work/home
+
+[clock]
+set_from_car = false  # never touch the PC clock
+
+[tx]
+enabled = true        # frames go to the virtual bus only
+
+[power]
+shutdown = false
+
+[input]
+uinput = false        # no uinput off Linux; LIVI keys show in the event list
+long_ms = 440
+extended_s = 10
+
+[light]
+auto_brightness = true
+dark_mode_source = "headlights"
+
+[dis]
+enabled = true
+claim = "always"
+default_page = "readings"
+claim_nav = true
+release_nav = true
+claim_phone = true
+release_phone = true
+claim_media = true
+release_media = true
+nav_style = "fancy"   # or "stock"

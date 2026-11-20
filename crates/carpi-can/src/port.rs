@@ -11,20 +11,30 @@ pub enum Port {
     /// A J2534 PassThru device (bench), from `j2534::open`.
     #[cfg(windows)]
     J2534(crate::j2534::J2534Port),
+    /// The desktop simulator's virtual bus ([`crate::sim`]).
+    Sim(crate::sim::SimPort),
 }
 
 impl Port {
-    /// Opens a SocketCAN interface by name (e.g. `ican`, `can0`).
-    #[cfg(target_os = "linux")]
+    /// Opens a SocketCAN interface by name (e.g. `ican`, `can0`), or the
+    /// simulator's virtual bus under the same name when `CARPI_SIM_CAN` is set.
     pub fn open(iface: &str) -> io::Result<Self> {
+        match crate::sim::hub() {
+            Some(addr) => Ok(Port::Sim(crate::sim::SimPort::open(&addr, iface)?)),
+            None => Self::open_socket(iface),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn open_socket(iface: &str) -> io::Result<Self> {
         Ok(Port::Socket(socket::SocketPort::open(iface)?))
     }
 
     #[cfg(not(target_os = "linux"))]
-    pub fn open(iface: &str) -> io::Result<Self> {
+    fn open_socket(iface: &str) -> io::Result<Self> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            format!("SocketCAN ({iface}) needs Linux; use a replay file"),
+            format!("SocketCAN ({iface}) needs Linux; use a replay file or CARPI_SIM_CAN"),
         ))
     }
 
@@ -36,6 +46,7 @@ impl Port {
             Port::Replay(r) => Ok(r.recv().await),
             #[cfg(windows)]
             Port::J2534(j) => j.recv().await,
+            Port::Sim(s) => s.recv().await,
         }
     }
 }
