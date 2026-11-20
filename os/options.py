@@ -231,6 +231,8 @@ def apply_user_config(s, share, user):
             "bindings": {"knobLeft": "PageUp", "knobRight": "PageDown"},
             "wifiDedicatedInterface": True,
             "kiosk": {"main": True, "cluster": False, "aux": False},
+            # RNS-E: knob keys for AA; its touchscreen setting stays auto (none attached).
+            "androidAuto": {"keys": "rotary"},
         }
         if s.get("video") in ("sdlink", "edid480i", "edid480p"):
             seed.update(
