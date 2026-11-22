@@ -8,7 +8,7 @@
 #   target/release/{carpid,carpi[,carpi-update]}   (--pq-bin to point elsewhere)
 #   livi/out/bin/{LIVI,livi-core,livi-helperd,livi-gst-host,livi-compositor}   (cargo xtask build-native)
 #   livi/assets/linux/*   (LIVI's unit and sudoers templates; bundled with the binaries as livi/...)
-#   sdlink/bin/{rnv3enc,avlink,wlcap}   (make in sdlink)
+#   sdlink/bin/{rnv3enc,rnv3enc-a76,rnv3enc-a72,rnv3enc-a53,avlink,wlcap}   (make in sdlink)
 #   sdlink/pi/run/*, deploy/*
 # Firmware is optional: --teensy HEX (sdlink teensy, pio run) and --rnse DIR (sdlink rnse/out after
 # rnse/module/build.sh: sector_107.bin, its .sha256 and module.json). CI builds both (release.yml).
@@ -77,7 +77,7 @@ for f in "$ROOT"/livi/assets/linux/*; do
   case $n in *.template|*.xml) m=0644 ;; *) m=0755 ;; esac
   put "$f" "livi/assets/linux/$n" $m
 done
-for b in rnv3enc avlink wlcap; do
+for b in rnv3enc rnv3enc-a76 rnv3enc-a72 rnv3enc-a53 avlink wlcap; do
   put "$ROOT/sdlink/bin/$b" "bin/$b" 0755
 done
 for f in "$ROOT"/sdlink/pi/run/*; do

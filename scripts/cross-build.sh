@@ -64,7 +64,7 @@ docker run --rm \
 
     if want sdlink; then
       echo "== sdlink"
-      make -C /src/sdlink -s CC=aarch64-linux-gnu-gcc ENCARCH=-mcpu=cortex-a76 clean all
+      make -C /src/sdlink -s CC=aarch64-linux-gnu-gcc ARCH=aarch64 clean all
     fi
 
     if [ "$BUNDLE" = 1 ]; then

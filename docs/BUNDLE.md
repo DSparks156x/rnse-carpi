@@ -41,7 +41,8 @@ bin/carpi-update                    only once the crate exists
 livi/out/bin/LIVI                   LIVI UI (livi-ui package)
 livi/out/bin/livi-core
 livi/out/bin/...                    the other LIVI binaries; livi/assets/linux/* its templates
-bin/rnv3enc                         sdlink: encoder
+bin/rnv3enc                         sdlink: encoder, plain ARMv8-A (any aarch64 CPU)
+bin/rnv3enc-{a76,a72,a53}           the same tuned for Pi 5 / Pi 4 / Pi 3 + Zero 2; hud2.sh picks by CPU
 bin/avlink                          sdlink: link to the Teensy
 bin/wlcap                           sdlink: screen capture
 share/config/carpid.toml            default config, reference only
