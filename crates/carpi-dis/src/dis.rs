@@ -257,8 +257,20 @@ impl Dis {
         self.probe && self.session.frame_idle() && self.session.submit(now, p).is_ok()
     }
 
+    /// Wheel on the call page: move the Yes/No pick.
+    pub fn step_call(&mut self, now: Instant, delta: i32) {
+        if self.call.step(delta) {
+            self.step(now);
+        }
+    }
+
+    /// What a wheel click on the call page does.
+    pub fn call_choice(&self) -> Option<crate::screens::call::CallChoice> {
+        self.call.choice()
+    }
+
     /// DIS focus (the wheel drives the DIS): the readings page name and the
-    /// call actions invert. Nothing else is ever inverted.
+    /// picked call action invert. Nothing else is ever inverted.
     pub fn set_focus(&mut self, now: Instant, on: bool) {
         self.readings.set_focus(on);
         self.call.set_focus(on);

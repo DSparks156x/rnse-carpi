@@ -6,7 +6,8 @@
 //!   it's stopped when that goes, and anything it still sends is refused.
 //! - Inputs are read from the store every tick: `nav.*` from the LIVI bridge,
 //!   and the readings page from its configured store names.
-//! - DIS keys (wheel keys while the DIS has focus) pick the user page.
+//! - DIS keys: the rocker picks the user page, the wheel (DIS focus) moves
+//!   within it (readings subpages, the call's Yes/No).
 //! - Top lines (`DisplayTop`) only while `rnse.on_tv`: on TV the firmware
 //!   redirects the RNS-E's own text, so the lines are ours (PLAN 6). Nav
 //!   distance and road while navigating, else media title and artist.
@@ -15,7 +16,7 @@
 use carpi_can::Frame;
 use carpi_dis::icons::Art;
 use carpi_dis::image::{CoverParams, cover};
-use carpi_dis::screens::call::CallInput;
+use carpi_dis::screens::call::{CallChoice, CallInput};
 use carpi_dis::screens::media::{ART as MEDIA_ART, MediaInput, MediaLayout};
 use carpi_dis::screens::nav::{
     Clock, LaneLayout, NavConfig, NavInput, NavStyle, Units, format_distance_in,
@@ -27,7 +28,7 @@ use carpi_dis::session::{Phase, Window};
 use carpi_dis::top::TopLines;
 use carpi_dis::{Dis, DisConfig, ScreenId, SessionEvent};
 use carpi_gate::{BusView, Gate, TxClass};
-use carpi_input::DisKey;
+use carpi_input::{CarAction, DisKey};
 use carpi_nm::BusState;
 use carpi_state::{Store, Value};
 use std::time::{Duration, Instant};
@@ -670,47 +671,75 @@ impl Display {
         }
     }
 
-    /// The stalk rocker (and the wheel while the DIS has focus): Up/Down
-    /// step through the pages from the one on screen, the way the old DIS
-    /// client did: media, nav while a route runs, the call while there is
-    /// one, each readings page, accel. Only while our DIS owns the centre;
-    /// otherwise ignored. Nav and calls still interrupt a picked page.
-    /// Back unpicks it.
-    pub fn key(&mut self, now: Instant, k: DisKey) {
-        if !self.running || !self.dis.session().owned() {
+    /// DIS keys. The stalk rocker (`PagePrev`/`PageNext`) steps the main
+    /// pages from the one on screen, the way the old DIS client did: media,
+    /// nav while a route runs, the call while there is one, readings, accel.
+    /// The wheel (`Up`/`Down`/`Select`, DIS focus) only moves within the page
+    /// on screen: readings subpages, the call's Yes/No; it never changes the
+    /// main page (Drew: that's the rocker's job). Only while our DIS owns the
+    /// centre, except a click in a call, which still answers / ends. Nav and
+    /// calls still interrupt a picked page. Back unpicks it.
+    ///
+    /// Returns a call action for the bridge.
+    pub fn key(&mut self, now: Instant, k: DisKey) -> Option<CarAction> {
+        let up = self.running && self.dis.session().owned();
+        let here = self.dis.shown().or(self.dis.wanted());
+        if k == DisKey::Select && self.dis.in_call() {
+            // Our pick when the call page is up; otherwise what the click
+            // does without focus.
+            let c = if up && here == Some(ScreenId::Call) {
+                self.dis.call_choice()?
+            } else if self.dis.call_choice() == Some(CallChoice::End) {
+                CallChoice::End
+            } else {
+                CallChoice::Answer
+            };
+            tracing::info!("dis: key Select -> call {c:?}");
+            return Some(match c {
+                CallChoice::Answer => CarAction::CallAccept,
+                CallChoice::Decline | CallChoice::End => CarAction::CallEnd,
+            });
+        }
+        if !up {
             tracing::info!("dis: key {k:?} ignored (our DIS isn't up)");
-            return;
+            return None;
         }
         let delta: i32 = match k {
-            DisKey::Up => -1,
-            DisKey::Down => 1,
-            DisKey::Select => return,
+            DisKey::Up | DisKey::PagePrev => -1,
+            DisKey::Down | DisKey::PageNext => 1,
+            DisKey::Select => return None,
             DisKey::Back => {
                 self.user_page = false;
                 tracing::info!("dis: key Back -> automatic");
                 self.dis.set_user_page(now, None);
-                return;
+                return None;
             }
         };
-        // (screen, readings subpage)
-        let mut list: Vec<(ScreenId, usize)> = vec![(ScreenId::Media, 0)];
+        if matches!(k, DisKey::Up | DisKey::Down) {
+            match here {
+                Some(ScreenId::Readings) => {
+                    self.dis.step_readings(now, delta);
+                    tracing::info!(
+                        "dis: key {k:?} -> readings page {}",
+                        self.dis.readings().page_index() + 1
+                    );
+                }
+                Some(ScreenId::Call) => self.dis.step_call(now, delta),
+                other => tracing::info!("dis: key {k:?} ignored on {other:?}"),
+            }
+            return None;
+        }
+        let mut list = vec![ScreenId::Media];
         if self.dis.nav_available() {
-            list.push((ScreenId::Nav, 0));
+            list.push(ScreenId::Nav);
         }
         if self.dis.in_call() {
-            list.push((ScreenId::Call, 0));
+            list.push(ScreenId::Call);
         }
-        let (sub, subs) = (
-            self.dis.readings().page_index(),
-            self.dis.readings().page_count().max(1),
-        );
-        list.extend((0..subs).map(|i| (ScreenId::Readings, i)));
-        list.push((ScreenId::Accel, 0));
-        let here = match self.dis.shown().or(self.dis.wanted()) {
-            Some(ScreenId::Readings) => Some((ScreenId::Readings, sub)),
-            Some(ScreenId::Cover | ScreenId::Egg) => Some((ScreenId::Media, 0)),
-            Some(s) => Some((s, 0)),
-            None => None,
+        list.extend([ScreenId::Readings, ScreenId::Accel]);
+        let here = match here {
+            Some(ScreenId::Cover | ScreenId::Egg) => Some(ScreenId::Media),
+            s => s,
         };
         let n = list.len() as i32;
         let next = match here.and_then(|h| list.iter().position(|e| *e == h)) {
@@ -718,21 +747,12 @@ impl Display {
             None if delta > 0 => 0,
             None => list.len() - 1,
         };
-        let (screen, page) = list[next];
-        if screen == ScreenId::Readings {
-            self.dis.step_readings(now, page as i32 - sub as i32);
-        }
+        let screen = list[next];
         self.picked = screen;
         self.user_page = true;
-        tracing::info!(
-            "dis: key {k:?} -> {screen:?} {}",
-            if screen == ScreenId::Readings {
-                format!("page {}", page + 1)
-            } else {
-                String::new()
-            }
-        );
+        tracing::info!("dis: key {k:?} -> {screen:?}");
         self.dis.set_user_page(now, Some(screen));
+        None
     }
 
     /// Decode a new cover when `media.art_id` changes; drop it when it goes.

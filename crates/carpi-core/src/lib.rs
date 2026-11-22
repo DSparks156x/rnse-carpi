@@ -283,7 +283,9 @@ impl Car {
             })
             .collect();
         for k in keys {
-            self.display.key(now, k);
+            if let Some(a) = self.display.key(now, k) {
+                self.outputs.push(Output::Car(a));
+            }
         }
     }
 

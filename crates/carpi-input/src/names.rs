@@ -82,11 +82,13 @@ const CAR: [(CarAction, &str); 7] = [
     (CarAction::CallEnd, "call_end"),
 ];
 
-const DIS: [(DisKey, &str); 4] = [
+const DIS: [(DisKey, &str); 6] = [
     (DisKey::Up, "up"),
     (DisKey::Down, "down"),
     (DisKey::Select, "select"),
     (DisKey::Back, "back"),
+    (DisKey::PagePrev, "page_prev"),
+    (DisKey::PageNext, "page_next"),
 ];
 
 const LIVI: [(LiviKey, &str); 16] = [
@@ -257,10 +259,19 @@ impl RouteConfig {
                     .call_active
                     .insert(t, parse(&CAR, "action", &r.action).map_err(at)?)
                     .is_some())?,
-                "dis" => dup(cfg
-                    .dis
-                    .insert(t, parse(&DIS, "action", &r.action).map_err(at)?)
-                    .is_some())?,
+                "dis" => {
+                    let mut k = parse(&DIS, "action", &r.action).map_err(at)?;
+                    // Saved before the rocker got its own actions: the
+                    // rocker's up/down meant the main pages.
+                    if matches!(t.0, Key::StalkUp | Key::StalkDown) {
+                        k = match k {
+                            DisKey::Up => DisKey::PagePrev,
+                            DisKey::Down => DisKey::PageNext,
+                            k => k,
+                        };
+                    }
+                    dup(cfg.dis.insert(t, k).is_some())?
+                }
                 "car" => dup(cfg
                     .car
                     .insert(t, parse(&CAR, "action", &r.action).map_err(at)?)
@@ -299,6 +310,20 @@ mod tests {
         assert_eq!(back.to_rows(), rows);
         assert_eq!(back.livi, d.livi);
         assert_eq!(back.system, d.system);
+    }
+
+    #[test]
+    fn old_rocker_rows_page_main_pages() {
+        let mut rows = RouteConfig::default().to_rows();
+        for r in rows.iter_mut().filter(|r| r.table == "dis") {
+            match r.action.as_str() {
+                "page_prev" => r.action = "up".into(),
+                "page_next" => r.action = "down".into(),
+                _ => {}
+            }
+        }
+        let cfg = RouteConfig::from_rows(&rows).unwrap();
+        assert_eq!(cfg.dis, RouteConfig::default().dis);
     }
 
     #[test]

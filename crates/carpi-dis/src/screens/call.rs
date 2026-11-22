@@ -7,11 +7,12 @@
 //!   (`Incoming`, `Calling`, `On hold`, or the call timer), battery x 53..61;
 //! - the name alone, centred at y=20, marquee when wider; the number shows
 //!   there only when there's no name;
-//! - action labels y=32, side by side around the centre, inverted only
-//!   while the DIS has focus:
-//!   ringing `Yes` (wheel click / TEL) and `No` (TEL held; `Answer`/`Decline`
-//!   filled the whole row); in a call `End` (wheel click / TEL held). Keys
-//!   from carpi-input `route.rs`.
+//! - action labels y=32, side by side around the centre: ringing `Yes` and
+//!   `No` (`Answer`/`Decline` filled the whole row), in a call `End`. While
+//!   the DIS has focus the wheel picks one and only that one is inverted,
+//!   the click presses it (Drew: inverting all of them says nothing).
+//!   Without focus none is inverted; the wheel click answers / ends and TEL
+//!   works either way (carpi-input `route.rs`).
 //!
 //! Bars, battery and labels are `52` fills/clears plus black text: no
 //! bitmaps, no `63` latch. Each redraws in one group, only when it changes.
@@ -42,6 +43,14 @@ pub struct CallInput {
 pub const STATUS_Y: u8 = 9;
 pub const NAME_Y: u8 = 20;
 pub const ACTION_Y: u8 = 32;
+/// What a call action label does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallChoice {
+    Answer,
+    Decline,
+    End,
+}
+
 /// Gap between pills.
 const PILL_GAP: u8 = 4;
 
@@ -65,8 +74,10 @@ pub struct CallScreen {
     /// What's drawn: bars, battery, action labels.
     shown_bars: Option<Option<u8>>,
     shown_battery: Option<Option<u8>>,
-    shown_actions: Option<(Vec<&'static str>, bool)>,
+    shown_actions: Option<(Vec<&'static str>, Option<usize>)>,
     focus: bool,
+    /// The action the wheel is on (DIS focus).
+    selected: usize,
 }
 
 impl Default for CallScreen {
@@ -92,12 +103,38 @@ impl CallScreen {
             shown_battery: None,
             shown_actions: None,
             focus: false,
+            selected: 0,
         }
     }
 
-    /// DIS focus: the action labels invert.
+    /// DIS focus: the picked action label inverts.
     pub fn set_focus(&mut self, on: bool) {
         self.focus = on;
+    }
+
+    /// Wheel: move the pick (stops at the ends). Whether it moved.
+    pub fn step(&mut self, delta: i32) -> bool {
+        let n = self.choices().len() as i32;
+        if n == 0 {
+            return false;
+        }
+        let next = (self.selected as i32 + delta).clamp(0, n - 1) as usize;
+        let moved = next != self.selected;
+        self.selected = next;
+        moved
+    }
+
+    /// What the click does now.
+    pub fn choice(&self) -> Option<CallChoice> {
+        self.choices().get(self.selected).copied()
+    }
+
+    fn choices(&self) -> Vec<CallChoice> {
+        match self.input.state.as_deref() {
+            Some("ringing") => vec![CallChoice::Answer, CallChoice::Decline],
+            Some("active" | "held" | "dialing") => vec![CallChoice::End],
+            _ => Vec::new(),
+        }
     }
 
     pub fn active(&self) -> bool {
@@ -111,6 +148,9 @@ impl CallScreen {
             self.active_since = Some(now);
         } else if input.state.is_none() {
             self.active_since = None;
+        }
+        if input.state != self.input.state {
+            self.selected = 0;
         }
         let who = input
             .name
@@ -136,11 +176,14 @@ impl CallScreen {
     }
 
     fn actions(&self) -> Vec<&'static str> {
-        match self.input.state.as_deref() {
-            Some("ringing") => vec!["Yes", "No"],
-            Some("active" | "held" | "dialing") => vec!["End"],
-            _ => Vec::new(),
-        }
+        self.choices()
+            .iter()
+            .map(|c| match c {
+                CallChoice::Answer => "Yes",
+                CallChoice::Decline => "No",
+                CallChoice::End => "End",
+            })
+            .collect()
     }
 
     fn status_groups(&mut self, now: Instant, cx: &Ctx) -> Vec<Group> {
@@ -192,15 +235,16 @@ impl CallScreen {
         Some(Group::new("battery", ops))
     }
 
-    /// Action labels side by side around the centre. Inverted (fill + black
-    /// text) only while the DIS has focus: Drew's rule, highlight means focus.
-    /// The row clear rides in the same group.
+    /// Action labels side by side around the centre. While the DIS has focus
+    /// the picked one is inverted (fill + black text), the rest plain; without
+    /// focus none is (Drew's rule, highlight means focus). The row clear
+    /// rides in the same group.
     fn actions_group(&mut self, cx: &Ctx) -> Option<Group> {
-        let want = (self.actions(), self.focus);
+        let want = (self.actions(), self.focus.then_some(self.selected));
         if self.shown_actions.as_ref() == Some(&want) {
             return None;
         }
-        let focus = self.focus;
+        let picked = want.1;
         let m = &cx.metrics;
         let mut ops = vec![Op::Clear(Rect::new(0, ACTION_Y - 1, 64, TEXT_H + 1))];
         let pills: Vec<(Vec<u8>, u8)> = want
@@ -215,9 +259,10 @@ impl CallScreen {
         let total = pills.iter().map(|(_, w)| *w).sum::<u8>()
             + PILL_GAP * (pills.len().saturating_sub(1) as u8);
         let mut x = 32u8.saturating_sub(total / 2);
-        for (b, w) in pills {
+        for (i, (b, w)) in pills.into_iter().enumerate() {
             let rect = Rect::new(x, ACTION_Y - 1, w, TEXT_H);
             x += w + PILL_GAP;
+            let focus = picked == Some(i);
             if focus {
                 ops.push(Op::Fill(rect));
             }
@@ -285,7 +330,13 @@ mod tests {
         s.set(t0, call("ringing"));
         assert_eq!(s.status_text(t0), "Incoming");
         assert_eq!(s.actions(), vec!["Yes", "No"]);
+        assert_eq!(s.choice(), Some(CallChoice::Answer));
+        assert!(s.step(1));
+        assert_eq!(s.choice(), Some(CallChoice::Decline));
+        assert!(!s.step(1));
         s.set(t0, call("active"));
+        assert_eq!(s.choice(), Some(CallChoice::End));
+        assert!(!s.step(-1));
         assert_eq!(s.status_text(t0 + Duration::from_secs(83)), "1:23");
         assert_eq!(s.actions(), vec!["End"]);
         s.set(t0, CallInput::default());

@@ -5,8 +5,9 @@
 //! 1. Not on TV: drop.
 //! 2. `dis_toggle` trigger: `Action(ToggleDisFocus)`.
 //! 3. `system` table: `Action`.
-//! 4. A call ringing or active, and in the `call` table: `Car`.
-//! 5. DIS focus and in the `dis` table: `Dis`.
+//! 4. DIS focus and in the `dis` table: `Dis` (in a call too: the wheel
+//!    picks Yes/No on the DIS and the click presses it).
+//! 5. A call ringing or active, and in the `call` table: `Car`.
 //! 6. `car` table (projection-neutral actions for the bridge): `Car`.
 //! 7. `livi` table (uinput keys): `Livi`.
 //!
@@ -48,10 +49,15 @@ pub struct Context {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DisKey {
+    /// Wheel (DIS focus): within the page on screen (readings subpages, the
+    /// call's Yes/No).
     Up,
     Down,
     Select,
     Back,
+    /// Stalk rocker: the main pages (media, nav, call, readings, accel).
+    PagePrev,
+    PageNext,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -142,9 +148,9 @@ impl Default for RouteConfig {
             ((K::WheelClick, Short), DisKey::Select),
             ((K::WheelClick, Long), DisKey::Back),
             // The stalk rocker pages our DIS (while it's up), focus or
-            // not, TV or not.
-            ((K::StalkUp, Short), DisKey::Up),
-            ((K::StalkDown, Short), DisKey::Down),
+            // not, TV or not. The wheel only moves within a page.
+            ((K::StalkUp, Short), DisKey::PagePrev),
+            ((K::StalkDown, Short), DisKey::PageNext),
         ]);
         let car = HashMap::from([
             ((K::Nav, Short), C::OpenNav),
@@ -206,6 +212,11 @@ pub fn route(cfg: &RouteConfig, ctx: &Context, g: &Gesture) -> Route {
     if let Some(&a) = cfg.system.get(&t) {
         return Route::Action(a);
     }
+    if ctx.focus == Focus::Dis
+        && let Some(&k) = cfg.dis.get(&t)
+    {
+        return Route::Dis(k);
+    }
     if ctx.livi_connected {
         let call = match ctx.call {
             Call::Ringing => cfg.call_ringing.get(&t).or_else(|| cfg.call_active.get(&t)),
@@ -215,11 +226,6 @@ pub fn route(cfg: &RouteConfig, ctx: &Context, g: &Gesture) -> Route {
         if let Some(&a) = call {
             return Route::Car(a);
         }
-    }
-    if ctx.focus == Focus::Dis
-        && let Some(&k) = cfg.dis.get(&t)
-    {
-        return Route::Dis(k);
     }
     if !ctx.livi_connected {
         return Route::Drop;
@@ -275,8 +281,8 @@ mod tests {
             ..TV
         };
         for ctx in [TV, off, IN_CALL] {
-            assert_eq!(r(ctx, Key::StalkDown, Short), Route::Dis(DisKey::Down));
-            assert_eq!(r(ctx, Key::StalkUp, Short), Route::Dis(DisKey::Up));
+            assert_eq!(r(ctx, Key::StalkDown, Short), Route::Dis(DisKey::PageNext));
+            assert_eq!(r(ctx, Key::StalkUp, Short), Route::Dis(DisKey::PagePrev));
             assert_eq!(r(ctx, Key::StalkUp, Long), Route::Drop);
         }
     }
@@ -337,6 +343,34 @@ mod tests {
             (IN_CALL, Key::Tel, Long, Car(CarAction::CallEnd)),
             (IN_CALL, Key::Tel, Short, Car(CarAction::OpenPhone)),
             (IN_CALL, Key::WheelDown, Short, Livi(LiviKey::Next)),
+            // DIS focus in a call: the wheel picks on the DIS, TEL still acts.
+            (
+                Context {
+                    focus: Focus::Dis,
+                    ..RINGING
+                },
+                Key::WheelClick,
+                Short,
+                Dis(DisKey::Select),
+            ),
+            (
+                Context {
+                    focus: Focus::Dis,
+                    ..RINGING
+                },
+                Key::WheelDown,
+                Short,
+                Dis(DisKey::Down),
+            ),
+            (
+                Context {
+                    focus: Focus::Dis,
+                    ..RINGING
+                },
+                Key::Tel,
+                Short,
+                Car(CarAction::CallAccept),
+            ),
             (
                 Context {
                     focus: Focus::Page,
